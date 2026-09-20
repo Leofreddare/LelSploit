@@ -17,9 +17,7 @@ LelSploit is a lightweight simple executor for roblox
 <img src="https://img.shields.io/github/repo-size/Leofreddare/LelSploit?style=flat-square" height="20">
 
 </div>
-
-</div>
-
+ 
 ![LelSploit Preview](https://raw.githubusercontent.com/Leofreddare/LelSploit/main/preview.png)
 
 ---
