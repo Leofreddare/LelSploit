@@ -5,7 +5,7 @@
   <Package
       Name="LelSploit"
       Manufacturer="LelSploit"
-      Version="1.0.0"
+      Version="1.0.1"
       UpgradeCode="f366c8d9-0cc0-4c84-9e4b-bab8c80ef2f7"
       Scope="perMachine">
 
