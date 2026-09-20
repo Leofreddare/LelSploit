@@ -18,8 +18,8 @@ LelSploit is a lightweight simple executor for roblox
 
 </div>
 
-<a href="https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelSploit-Preview.png"><img src="https://img.shields.io/github/repo-size/Leofreddare/LelSploit?style=flat-square" height="20"></a>
-
+[<a href="https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelSploit-Preview.png"><img src="https://img.shields.io/github/repo-size/Leofreddare/LelSploit?style=flat-square" height="20"></a>
+](https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelSploit-Preview.png)
 
 ---
 
