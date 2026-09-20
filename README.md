@@ -26,7 +26,7 @@ LelSploit is a lightweight simple executor for roblox
 - Scriptblox integration
 - Fastflags & Proxy/Bypass Fastflag editor
 - Extensions
-- Full Luau support
+- ~82% UNC
 
 ---
 
