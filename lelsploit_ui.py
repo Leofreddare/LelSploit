@@ -4246,7 +4246,7 @@ class CodeEditor(QsciScintilla):
         self._analysis_timer.timeout.connect(self._reanalyze_document)
         self._completion_timer = QTimer(self)
         self._completion_timer.setSingleShot(True)
-        self._completion_timer.setInterval(28)
+        self._completion_timer.setInterval(12)
         self._completion_timer.timeout.connect(self.show_autocomplete)
         try:
             self.textChanged.connect(self._schedule_analysis)
@@ -4279,9 +4279,29 @@ class CodeEditor(QsciScintilla):
     def _load_autocomplete_icons(self):
         self._autocomplete_icons.clear()
         icon_dir = ICON_DIR / "autofill"
+        if not icon_dir.is_dir():
+            return
+
+        # Keep the configured autofill artwork, but tolerate Windows-style
+        # case differences and alternate image extensions when the app is
+        # copied/bundled on another filesystem.
+        by_name = {}
+        by_stem = {}
+        try:
+            for candidate in icon_dir.iterdir():
+                if not candidate.is_file():
+                    continue
+                by_name.setdefault(candidate.name.casefold(), candidate)
+                by_stem.setdefault(candidate.stem.casefold(), candidate)
+        except OSError:
+            return
+
         for kind, filename in self._AUTOFILL_ICON_FILES.items():
-            path = icon_dir / filename
+            configured = Path(filename)
+            path = icon_dir / configured
             if not path.is_file():
+                path = by_name.get(configured.name.casefold()) or by_stem.get(configured.stem.casefold())
+            if path is None or not path.is_file():
                 continue
             icon = QIcon(str(path))
             if not icon.isNull():
@@ -4850,7 +4870,7 @@ class CodeEditor(QsciScintilla):
             "property": 2, "event": 2, "callback": 2,
             "enum_member": 2, "field": 2,
             "keyword": 3, "module": 3, "struct": 3, "type": 3,
-            "service": 4, "class": 5, "enum": 5,
+            "service": 4, "class": 4, "enum": 4,
         }
         ordered = sorted(
             unique.items(),
@@ -5046,6 +5066,11 @@ class CodeEditor(QsciScintilla):
             self._queue_autocomplete(force=True)
             event.accept()
             return
+        if event.key() == Qt.Key.Key_Tab and self._completion_timer.isActive():
+            # A fast type -> Tab can arrive before the delayed autocomplete timer fires.
+            # Flush the pending completion now so the existing Tab-accept path sees it.
+            self._completion_timer.stop()
+            self.show_autocomplete()
         if self._autocomplete_active() and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown):
             step = -1 if event.key() == Qt.Key.Key_Up else 1
             if event.key() == Qt.Key.Key_PageUp:
