@@ -1,0 +1,45 @@
+{
+  "window": {
+    "background": "#08090a",
+    "panel": "#0b0c0d",
+    "surface": "#101214",
+    "surface_alt": "#16191b",
+    "hover": "#1c2022",
+    "border": "#272b2e",
+    "text": "#e8e9ea",
+    "muted": "#92989b",
+    "accent": "#9cab91",
+    "selection": "#252a2d"
+  },
+  "editor": {
+    "background": "#121416",
+    "text": "#f1f2f2",
+    "caret": "#ffffff",
+    "selection": "#292e31",
+    "corner_radius": 4,
+    "inner_padding": 1
+  },
+  "tabs": {
+    "tab_background": "#131517",
+    "tab_hover": "#191c1e",
+    "tab_selected": "#1e2225",
+    "text": "#ffffff",
+    "corner_radius": 3
+  },
+  "buttons": {
+    "background": "#101214",
+    "hover": "#1c2022",
+    "border": "#272b2e",
+    "corner_radius": 5,
+    "text_width": 116,
+    "text_height": 34,
+    "icon_size": 34,
+    "spacing": 5
+  },
+  "title": {
+    "color": "#e3e5e6",
+    "font_size": 14,
+    "font_weight": 800,
+    "font_style": "oblique"
+  }
+}
