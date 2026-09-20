@@ -1,0 +1,1 @@
+wix build -arch x64 installer.wxs -o LelSploit.msi
