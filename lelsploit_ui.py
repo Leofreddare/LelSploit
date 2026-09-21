@@ -5,6 +5,7 @@ import random
 import statistics
 import codecs
 import ctypes
+from ctypes import wintypes
 import csv
 import hashlib
 import html
@@ -37,8 +38,8 @@ APPDATA_DIR = (
 )
 APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# BASE_DIR is intentionally the writable application-data root.  Keep the alias
-# because extension APIs and older code refer to the "LelSploit folder" by it.
+
+
 BASE_DIR = APPDATA_DIR
 
 from api_bridge import (
@@ -75,6 +76,74 @@ ROBLOX_PLAYER_IMAGES = {
 }
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 SETTINGS_PATH = BASE_DIR / "settings.json"
+CAPTURE_AFFINITY_NONE = 0x00000000
+CAPTURE_AFFINITY_EXCLUDE = 0x00000011
+
+
+def set_window_capture_exclusion(hwnd, enabled):
+    if sys.platform != "win32" or not hwnd:
+        return False
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
+    user32.SetWindowDisplayAffinity.restype = wintypes.BOOL
+    affinity = CAPTURE_AFFINITY_EXCLUDE if enabled else CAPTURE_AFFINITY_NONE
+    ctypes.set_last_error(0)
+    return bool(user32.SetWindowDisplayAffinity(int(hwnd), affinity))
+
+
+def get_window_exstyle(hwnd):
+    if sys.platform != "win32" or not hwnd:
+        return None
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    getter = getattr(user32, "GetWindowLongPtrW", None)
+    if getter is None:
+        getter = user32.GetWindowLongW
+        getter.restype = ctypes.c_long
+    else:
+        getter.restype = ctypes.c_ssize_t
+    getter.argtypes = [wintypes.HWND, ctypes.c_int]
+    ctypes.set_last_error(0)
+    value = getter(int(hwnd), -20)
+    if value == 0 and ctypes.get_last_error():
+        return None
+    return int(value)
+
+
+def set_window_taskbar_hidden(hwnd, hidden, restore_style=None):
+    if sys.platform != "win32" or not hwnd:
+        return False
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    setter = getattr(user32, "SetWindowLongPtrW", None)
+    if setter is None:
+        setter = user32.SetWindowLongW
+        setter.restype = ctypes.c_long
+    else:
+        setter.restype = ctypes.c_ssize_t
+    setter.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+    user32.SetWindowPos.argtypes = [
+        wintypes.HWND,
+        wintypes.HWND,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.UINT,
+    ]
+    user32.SetWindowPos.restype = wintypes.BOOL
+    current = get_window_exstyle(hwnd)
+    if current is None:
+        return False
+    if hidden:
+        target = (current | 0x00000080) & ~0x00040000
+    else:
+        target = current if restore_style is None else int(restore_style)
+    ctypes.set_last_error(0)
+    setter(int(hwnd), -20, target)
+    if ctypes.get_last_error():
+        return False
+    flags = 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020
+    user32.SetWindowPos(int(hwnd), 0, 0, 0, 0, 0, flags)
+    return True
 FASTFLAGS_PATH = BASE_DIR / "fastflags.json"
 CUSTOM_FASTFLAGS_PATH = BASE_DIR / "custom_fastflags.json"
 CUSTOM_FASTFLAG_STATE_PATH = BASE_DIR / "custom_fastflag_state.json"
@@ -411,7 +480,7 @@ class RobloxApiIndex:
         if not new_classes:
             return False
         with self._lock:
-            # Keep small hand-written fallbacks only where the dump omitted a useful root/member.
+            
             for name, members in self.classes.items():
                 if name not in new_classes:
                     new_classes[name] = members
@@ -660,9 +729,9 @@ def combined_fastflag_catalog():
 
 
 def useful_fastflag_catalog():
-    # The FastFlags List is intentionally limited to curated actions that
-    # require exactly one FastFlag. Multi-flag presets (for example FPS/LOD
-    # bundles) belong in the preset system, not this one-flag picker.
+    
+    
+    
     if FASTFLAG_MODULES_PATH.is_file():
         try:
             payload = read_json_object(FASTFLAG_MODULES_PATH, {})
@@ -701,9 +770,9 @@ def useful_fastflag_catalog():
         except Exception:
             pass
 
-    # Legacy fallback: retain only old actions that are associated with one
-    # FastFlag in total. This prevents multi-flag presets from leaking back in
-    # when fastflag_modules.json is unavailable.
+    
+    
+    
     preset_flags = {}
     for flag_name, meta in LEGACY_FASTFLAG_CATALOG.items():
         for preset in meta.get("presets", ()):
@@ -1393,8 +1462,8 @@ def choose_proxy_port(preferred=PROXY_PORT):
 
 def proxy_dependencies_available():
     try:
-        import cryptography  # noqa: F401
-        import zstandard  # noqa: F401
+        import cryptography  
+        import zstandard  
         return True
     except Exception:
         return False
@@ -1744,8 +1813,8 @@ def _scriptblox_title_from_slug(slug):
 
 
 def _scriptblox_parse_site_scripts(document, keyless=False):
-    # The public website still renders script cards even when the catalogue API
-    # returns HTTP 500. Parse only /script/ links so banners/navigation are ignored.
+    
+    
     pattern = re.compile(
         r'<a\b[^>]*href\s*=\s*(?P<q>["\'])'
         r'(?:(?:https?:)?//(?:www\.)?scriptblox\.com)?'
@@ -1788,8 +1857,8 @@ def _scriptblox_parse_site_scripts(document, keyless=False):
 
 
 def scriptblox_web_catalog(script_query, game_query, keyless, page):
-    # The website's SSR pages are an independent path from /api/script/* and are
-    # currently usable when the API responds with 500. Keep this as failover only.
+    
+    
     if int(page or 1) != 1:
         return {"scripts": [], "totalPages": 1, "nextPage": None, "_lelsploit_web": True}
 
@@ -1803,14 +1872,14 @@ def scriptblox_web_catalog(script_query, game_query, keyless, page):
 
     urls = []
     if numeric_place:
-        # Current game pages are /game/<id>-<slug>; the server can resolve the
-        # numeric prefix on deployments that support it. If it cannot, continue.
+        
+        
         urls.append(f"{SCRIPTBLOX_SITE}/game/{urllib.parse.quote(game_query, safe='')}")
     if query:
         urls.append(f"{SCRIPTBLOX_SITE}/?{urllib.parse.urlencode({'q': query})}")
     else:
-        # Homepage "Recent Scripts" can be empty while the API is unhealthy;
-        # the server-rendered trending page remains populated.
+        
+        
         urls.append(f"{SCRIPTBLOX_SITE}/trending")
 
     last_error = None
@@ -1830,8 +1899,8 @@ def scriptblox_web_catalog(script_query, game_query, keyless, page):
             last_error = exc
 
     if numeric_place and not query:
-        # A numeric-only game filter may not resolve as a website route. Prefer a
-        # usable ScriptBlox catalogue over a permanent blank/500 state.
+        
+        
         try:
             raw = scriptblox_request_bytes(
                 f"{SCRIPTBLOX_SITE}/trending", "text/html,application/xhtml+xml"
@@ -1862,7 +1931,7 @@ def scriptblox_raw_source(script_id, slug=None):
         candidates.append(f"{SCRIPTBLOX_API}/raw/{urllib.parse.quote(slug, safe='')}")
     raw_slug = slug or script_id
     if raw_slug:
-        # ScriptBlox's current public pages point View Raw here.
+        
         candidates.append(f"{SCRIPTBLOX_RAW_SITE}/{urllib.parse.quote(raw_slug, safe='')}")
 
     last_error = None
@@ -1905,9 +1974,9 @@ def fetch_scriptblox(output, request_id, script_query, game_query,
     if keyless:
         full["key"] = 0
 
-    # Some ScriptBlox deployments intermittently return HTTP 500 for valid
-    # combinations of optional filters. Retry with progressively simpler
-    # documented requests, then apply those filters locally below.
+    
+    
+    
     stable = {
         "page": page,
         "max": 20,
@@ -1961,8 +2030,8 @@ def fetch_scriptblox(output, request_id, script_query, game_query,
                 }
                 if wanted in identifiers:
                     matching.append(item)
-            # If ScriptBlox itself accepted placeId, all returned entries are
-            # already scoped even when the response omits a matching ID field.
+            
+            
             if matching:
                 scripts = matching
 
@@ -2370,6 +2439,91 @@ except ImportError as exc:
     raise SystemExit(message) from exc
 
 
+class CaptureExclusionService(QObject):
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.owner = owner
+        self._applied_hwnds = set()
+        self._taskbar_styles = {}
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    @staticmethod
+    def _eligible(widget):
+        if not isinstance(widget, QWidget) or not widget.isWindow():
+            return False
+        window_type = widget.windowType()
+        return window_type not in {
+            Qt.WindowType.Popup,
+            Qt.WindowType.ToolTip,
+            Qt.WindowType.SplashScreen,
+            Qt.WindowType.Desktop,
+        }
+
+    def apply_widget(self, widget, enabled=None):
+        if sys.platform != "win32" or not self._eligible(widget):
+            return
+        if enabled is None:
+            enabled = self.owner.screen_capture_hidden()
+        try:
+            hwnd = int(widget.winId())
+        except (RuntimeError, TypeError, ValueError):
+            return
+        if not hwnd:
+            return
+        if enabled and hwnd not in self._taskbar_styles:
+            original_style = get_window_exstyle(hwnd)
+            if original_style is not None:
+                self._taskbar_styles[hwnd] = original_style
+        restore_style = self._taskbar_styles.get(hwnd)
+        capture_ok = set_window_capture_exclusion(hwnd, bool(enabled))
+        taskbar_ok = set_window_taskbar_hidden(hwnd, bool(enabled), restore_style)
+        if capture_ok:
+            if enabled:
+                self._applied_hwnds.add(hwnd)
+            else:
+                self._applied_hwnds.discard(hwnd)
+        if not enabled and taskbar_ok:
+            self._taskbar_styles.pop(hwnd, None)
+
+    def apply_all(self, enabled=None):
+        if sys.platform != "win32":
+            return
+        if enabled is None:
+            enabled = self.owner.screen_capture_hidden()
+        app = QApplication.instance()
+        if enabled:
+            if app is None:
+                return
+            for widget in app.topLevelWidgets():
+                if isinstance(widget, QWidget) and widget.isVisible():
+                    self.apply_widget(widget, True)
+            return
+        for hwnd in tuple(self._applied_hwnds):
+            set_window_capture_exclusion(hwnd, False)
+        self._applied_hwnds.clear()
+        for hwnd, original_style in tuple(self._taskbar_styles.items()):
+            set_window_taskbar_hidden(hwnd, False, original_style)
+        self._taskbar_styles.clear()
+        if app is not None:
+            for widget in app.topLevelWidgets():
+                if isinstance(widget, QWidget) and widget.isVisible():
+                    self.apply_widget(widget, False)
+
+    def eventFilter(self, watched, event):
+        try:
+            if (
+                event.type() == QEvent.Type.Show
+                and self.owner.screen_capture_hidden()
+                and self._eligible(watched)
+            ):
+                QTimer.singleShot(0, lambda widget=watched: self.apply_widget(widget, True))
+        except RuntimeError:
+            pass
+        return False
+
+
 class SmoothScrollService(QObject):
     """Global wheel/trackpad smoothing. Extensions may tune it, but it is built in by default."""
     def __init__(self, parent=None):
@@ -2415,7 +2569,7 @@ class SmoothScrollService(QObject):
 
     def _apply_state(self):
         app = QApplication.instance()
-        # Smooth scrolling is a native LelSploit feature now, not something an extension must claim.
+        
         should_install = app is not None
         if should_install and not self._installed:
             app.installEventFilter(self)
@@ -2449,7 +2603,7 @@ class SmoothScrollService(QObject):
     def _config(self):
         if not self._claims:
             return self._default
-        # Extensions can still temporarily tune the built-in feel without owning the feature.
+        
         return next(reversed(self._claims.values()))
 
     @staticmethod
@@ -2502,7 +2656,7 @@ class SmoothScrollService(QObject):
         if event.type() != QEvent.Type.Wheel:
             return False
 
-        # Preserve editor/browser Ctrl+wheel zoom behavior.
+        
         try:
             modifiers = event.modifiers()
             if modifiers & Qt.KeyboardModifier.ControlModifier:
@@ -2524,7 +2678,7 @@ class SmoothScrollService(QObject):
         horizontal = shift or abs(angle.x()) > abs(angle.y()) or abs(pixel.x()) > abs(pixel.y())
         bar = area.horizontalScrollBar() if horizontal else area.verticalScrollBar()
         if bar is None or bar.maximum() <= bar.minimum():
-            # If the preferred axis cannot scroll, try the other one.
+            
             bar = area.verticalScrollBar() if horizontal else area.horizontalScrollBar()
             horizontal = not horizontal
             if bar is None or bar.maximum() <= bar.minimum():
@@ -2537,7 +2691,7 @@ class SmoothScrollService(QObject):
             component_angle = angle.y()
 
         if component_pixel:
-            # Trackpads report pixels; convert them to the target scrollbar's units.
+            
             step = max(1, int(bar.singleStep()))
             movement = (float(component_pixel) / 40.0) * (3.0 * step)
             duration_scale = 0.72
@@ -3844,7 +3998,7 @@ class FastFlagListDialog(QDialog):
         query = self.search.text().strip().casefold()
         rows = []
         for name, meta in self.catalog.items():
-            # Keep the old hidden action/category and Used by/preset text searchable.
+            
             haystack = " ".join((
                 name,
                 str(meta.get("category", "")),
@@ -4282,9 +4436,9 @@ class CodeEditor(QsciScintilla):
         if not icon_dir.is_dir():
             return
 
-        # Keep the configured autofill artwork, but tolerate Windows-style
-        # case differences and alternate image extensions when the app is
-        # copied/bundled on another filesystem.
+        
+        
+        
         by_name = {}
         by_stem = {}
         try:
@@ -5067,8 +5221,8 @@ class CodeEditor(QsciScintilla):
             event.accept()
             return
         if event.key() == Qt.Key.Key_Tab and self._completion_timer.isActive():
-            # A fast type -> Tab can arrive before the delayed autocomplete timer fires.
-            # Flush the pending completion now so the existing Tab-accept path sees it.
+            
+            
             self._completion_timer.stop()
             self.show_autocomplete()
         if self._autocomplete_active() and event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down, Qt.Key.Key_PageUp, Qt.Key.Key_PageDown):
@@ -6197,8 +6351,8 @@ EXTENSION_STEP_PERMISSIONS = {
     "script.execute": "execute",
     "fastflag.set": "fastflags",
     "fastflag.remove": "fastflags",
-    # Composable extension API primitives. These intentionally operate inside
-    # LelSploit or the extension sandbox rather than exposing native processes.
+    
+    
     "package.read": None,
     "package.list": None,
     "settings.get": "settings",
@@ -6221,8 +6375,8 @@ EXTENSION_STEP_PERMISSIONS = {
     "flow.foreach": None,
     "json.get": None,
     "json.set": None,
-    # General-purpose safe primitives added for LExt v1.1. They are composable
-    # rather than one-off features so niche extensions can be built without a host patch.
+    
+    
     "math.eval": None,
     "math.stats": None,
     "math.vector": None,
@@ -6416,8 +6570,8 @@ def normalize_extension_manifest(raw):
         if sequence and action_ref in seen_action_ids:
             shortcuts.append({"keys": sequence, "action": action_ref})
 
-    # Event hooks are deliberately generic. Extensions can react to editor/tab/
-    # clipboard/app/Roblox changes without needing a new host operation.
+    
+    
     allowed_events = {
         "editor.changed", "selection.changed", "tab.changed", "clipboard.changed",
         "app.activated", "app.deactivated", "roblox.changed"
@@ -6442,8 +6596,8 @@ def normalize_extension_manifest(raw):
             continue
         events.append({"event": event_name, "action": action_ref, "steps": steps})
 
-    # Declarative custom panels. Controls are intentionally data-only; button
-    # clicks dispatch existing extension actions.
+    
+    
     panels = []
     source_panels = raw.get("panels", []) or []
     if not isinstance(source_panels, list):
@@ -6782,7 +6936,7 @@ class LelExtensionRuntime:
                 button.setFixedSize(34, 34)
             action_id = str(spec.get("action", "") or "")
             button.clicked.connect(lambda checked=False, p=package, aid=action_id: self.run(p, self._find_action(p["manifest"], aid) or {"inputs": [], "steps": []}))
-            # Keep Visual Wizard at the far right of the extension-button cluster.
+            
             before = getattr(self.owner, "visual_wizard_button", None)
             index = layout.indexOf(before) if before is not None else -1
             if index >= 0: layout.insertWidget(index, button)
@@ -7118,7 +7272,7 @@ class LelExtensionRuntime:
         data, _log = self._roblox_log_bytes()
         text = data.decode("utf-8", errors="ignore")
         players = {}
-        # Only accept strong name/id pair patterns to avoid inventing identities from unrelated log numbers.
+        
         patterns = (
             r'"(?:userId|UserId)"\s*:\s*(\d{1,20}).{0,180}?"(?:name|Name|username|Username)"\s*:\s*"([A-Za-z0-9_]{1,32})"',
             r'"(?:name|Name|username|Username)"\s*:\s*"([A-Za-z0-9_]{1,32})".{0,180}?"(?:userId|UserId)"\s*:\s*(\d{1,20})',
@@ -8096,7 +8250,7 @@ class LelExtensionRuntime:
             else:
                 raise ValueError(f"Unsupported extension operation: {op}")
 
-            # Refresh common context values after each editor/clipboard/storage operation.
+            
             permissions = set(manifest.get("permissions", []))
             current = self.owner.editor
             if "editor" in permissions and current is not None:
@@ -8845,9 +8999,9 @@ class AppearanceManager(QObject):
                 elif isinstance(default, int):
                     try: self.theme[key] = int(value)
                     except (TypeError, ValueError): pass
-        # Saved Visual Wizard values are dormant until an enabled extension
-        # explicitly claims the service. Never let a stale visual_theme.json alter
-        # normal LelSploit startup (especially icon tinting).
+        
+        
+        
         self.active = False
         self._set_default_live_icons()
 
@@ -9042,9 +9196,9 @@ QMessageBox {{ background: {t['window_bg']}; color: {t['text']}; }}
         app = QApplication.instance()
         if app is None:
             return
-        # Theme top-level windows only. The stylesheet cascades to their children,
-        # while editor/icon surfaces are updated explicitly below. This is
-        # dramatically lighter and avoids recursive Polish/Show storms.
+        
+        
+        
         for widget in app.topLevelWidgets():
             if isinstance(widget, QWidget):
                 self._apply_widget(widget)
@@ -9076,8 +9230,8 @@ QMessageBox {{ background: {t['window_bg']}; color: {t['text']}; }}
             pass
 
     def eventFilter(self, watched, event):
-        # Installed only while Visual Wizard is enabled, and only themes newly
-        # shown top-level windows. Child widgets inherit from the window QSS.
+        
+        
         try:
             if event.type() == QEvent.Type.Show and isinstance(watched, QWidget) and watched.isWindow():
                 QTimer.singleShot(0, lambda w=watched: self._apply_widget_safe(w))
@@ -9173,7 +9327,7 @@ class VisualWizardService(QObject):
                 app = QApplication.instance()
                 if app is not None:
                     app.installEventFilter(self.owner.appearance_manager)
-                # Apply saved values only while an enabled extension owns Visual Wizard.
+                
                 QTimer.singleShot(0, self.owner.appearance_manager.activate)
     def retain_extensions(self, enabled_ids):
         had_claims = bool(self._claims)
@@ -10078,8 +10232,18 @@ class SettingsWindow(QDialog):
         self.setMinimumSize(550, 720)
         apply_window_icon(self)
 
-        layout = blur_content_layout(self, self, "Settings", (22, 20, 22, 22), 14)
+        outer_layout = blur_content_layout(self, self, "Settings", (0, 0, 0, 0), 0)
+        settings_scroll = QScrollArea()
+        settings_scroll.setWidgetResizable(True)
+        settings_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        settings_scroll.setStyleSheet("QScrollArea { border: 0; background: transparent; } QScrollArea > QWidget > QWidget { background: transparent; }")
+        settings_body = QWidget()
+        layout = QVBoxLayout(settings_body)
+        layout.setContentsMargins(22, 20, 22, 22)
         layout.setSpacing(14)
+        settings_scroll.setWidget(settings_body)
+        outer_layout.addWidget(settings_scroll, 1)
 
         install_title = QLabel("ScriptBlox install behavior")
         install_title.setStyleSheet("color: #eeeeee; font-size: 14px; font-weight: 600;")
@@ -10097,7 +10261,7 @@ class SettingsWindow(QDialog):
         tabs_title.setStyleSheet("color: #eeeeee; font-size: 14px; font-weight: 600;")
         layout.addWidget(tabs_title)
 
-        self.show_extension_check = QCheckBox("Show .luau in tab names")
+        self.show_extension_check = BrightCheckBox("Show .luau in tab names")
         self.show_extension_check.toggled.connect(self.owner.set_show_tab_extension)
         layout.addWidget(self.show_extension_check)
         layout.addSpacing(8)
@@ -10105,14 +10269,18 @@ class SettingsWindow(QDialog):
         editor_title = QLabel("Editor")
         editor_title.setStyleSheet("color: #eeeeee; font-size: 14px; font-weight: 600;")
         layout.addWidget(editor_title)
-        self.syntax_colors_check = QCheckBox("Syntax colors")
+        self.syntax_colors_check = BrightCheckBox("Syntax colors")
         self.syntax_colors_check.toggled.connect(self.owner.set_syntax_colors_enabled)
         layout.addWidget(self.syntax_colors_check)
         self.syntax_color_buttons = {}
         syntax_grid = QGridLayout()
-        syntax_grid.setContentsMargins(0, 2, 0, 2)
-        syntax_grid.setHorizontalSpacing(14)
+        syntax_grid.setContentsMargins(0, 4, 0, 4)
+        syntax_grid.setHorizontalSpacing(36)
         syntax_grid.setVerticalSpacing(10)
+        syntax_grid.setColumnStretch(0, 1)
+        syntax_grid.setColumnStretch(1, 1)
+        syntax_grid.setColumnMinimumWidth(0, 225)
+        syntax_grid.setColumnMinimumWidth(1, 225)
         for index, (key, label_text, default) in enumerate((
             ("syntax_comment", "Comments", syntax_config("syntax_comment", "#7f936f")),
             ("syntax_keyword", "Keywords", syntax_config("syntax_keyword", "#86a8e7")),
@@ -10125,20 +10293,23 @@ class SettingsWindow(QDialog):
         )):
             host = QWidget()
             host.setObjectName("syntaxColorRow")
-            host.setFixedHeight(38)
+            host.setMinimumWidth(225)
+            host.setFixedHeight(40)
             row = QHBoxLayout(host)
-            row.setContentsMargins(0, 4, 0, 4)
-            row.setSpacing(8)
-            row.addWidget(QLabel(label_text), 1)
+            row.setContentsMargins(0, 7, 0, 7)
+            row.setSpacing(12)
+            label = QLabel(label_text)
+            label.setMinimumWidth(92)
+            row.addWidget(label, 1)
             button = QPushButton()
-            button.setFixedSize(88, 30)
+            button.setFixedSize(72, 22)
             button.clicked.connect(lambda checked=False, k=key, d=default: self.pick_syntax_color(k, d))
             self.syntax_color_buttons[key] = (button, default)
             row.addWidget(button)
             syntax_grid.addWidget(host, index // 2, index % 2)
-            syntax_grid.setRowMinimumHeight(index // 2, 38)
+            syntax_grid.setRowMinimumHeight(index // 2, 40)
         layout.addLayout(syntax_grid)
-        layout.addSpacing(8)
+        layout.addSpacing(14)
 
         app_title = QLabel("Application")
         app_title.setStyleSheet("color: #eeeeee; font-size: 14px; font-weight: 600;")
@@ -10177,6 +10348,11 @@ class SettingsWindow(QDialog):
         self.proxy_start_combo.currentIndexChanged.connect(self.save_proxy_start_behavior)
         proxy_row.addWidget(self.proxy_start_combo)
         layout.addLayout(proxy_row)
+
+        self.capture_exclusion_check = BrightCheckBox("Hide from recordings/screenshare")
+        self.capture_exclusion_check.toggled.connect(self.owner.set_screen_capture_hidden)
+        self.capture_exclusion_check.setEnabled(sys.platform == "win32")
+        layout.addWidget(self.capture_exclusion_check)
 
         self.tray_notice_check = BrightCheckBox("Show notification when LelSploit is sent to the system tray")
         self.tray_notice_check.toggled.connect(self.owner.set_tray_notice_enabled)
@@ -10246,8 +10422,12 @@ class SettingsWindow(QDialog):
         self.restart_combo.blockSignals(True)
         self.restart_combo.setCurrentIndex(max(0, restart_index))
         self.restart_combo.blockSignals(False)
+        self.capture_exclusion_check.blockSignals(True)
+        self.capture_exclusion_check.setChecked(self.owner.screen_capture_hidden())
+        self.capture_exclusion_check.blockSignals(False)
         self.tray_notice_check.blockSignals(True)
         self.tray_notice_check.setChecked(self.owner.tray_notice_enabled())
+        self.tray_notice_check.setEnabled(not self.owner.screen_capture_hidden())
         self.tray_notice_check.blockSignals(False)
         proxy_behavior = self.owner.proxy_start_behavior()
         proxy_index = self.proxy_start_combo.findData(proxy_behavior)
@@ -11764,6 +11944,7 @@ class LelSploitWindow(QMainWindow):
         self._extension_started_ids = set()
         self._extension_shortcuts = []
         self.settings = JsonSettings(SETTINGS_PATH)
+        self.capture_exclusion_service = CaptureExclusionService(self)
         self.appearance_manager = AppearanceManager(self)
         self.visual_wizard_service = VisualWizardService(self)
         try:
@@ -12009,10 +12190,10 @@ class LelSploitWindow(QMainWindow):
             }}
         """)
         self.editor_tabs._editor_bar.setDrawBase(False)
-        # Visual Wizard deliberately does not apply a theme during ordinary startup.
-        # Its extension enables and applies the saved appearance on demand.
-        # Keep the I-beam cursor inside editors only. The normal window uses an arrow,
-        # while clickable controls use a pointing hand.
+        
+        
+        
+        
         self.setCursor(Qt.CursorShape.ArrowCursor)
         root.setCursor(Qt.CursorShape.ArrowCursor)
         for widget in self.findChildren(QPushButton):
@@ -12093,6 +12274,27 @@ class LelSploitWindow(QMainWindow):
         self.settings.setValue("fastflags/restart_behavior", value)
         self.settings.sync()
 
+    def screen_capture_hidden(self):
+        return self._setting_bool(self.settings.value("application/exclude_from_capture", False), False)
+
+    def _apply_capture_exclusion(self):
+        if hasattr(self, "capture_exclusion_service"):
+            self.capture_exclusion_service.apply_all(self.screen_capture_hidden())
+
+    def set_screen_capture_hidden(self, enabled):
+        enabled = bool(enabled)
+        self.settings.setValue("application/exclude_from_capture", enabled)
+        self.settings.sync()
+        if sys.platform == "win32" and hasattr(self, "capture_exclusion_service"):
+            QTimer.singleShot(0, lambda state=enabled: self.capture_exclusion_service.apply_all(state))
+        if self.tray_icon is not None:
+            if enabled:
+                self.tray_icon.hide()
+            else:
+                self.tray_icon.show()
+        if self.settings_window is not None and hasattr(self.settings_window, "tray_notice_check"):
+            self.settings_window.tray_notice_check.setEnabled(not enabled)
+
     def tray_notice_enabled(self):
         value = self.settings.value("application/tray_notification", True)
         if isinstance(value, str):
@@ -12116,7 +12318,7 @@ class LelSploitWindow(QMainWindow):
         if value in {"first", "always", "manual"}:
             return value
 
-        # Compatibility with the two temporary autostart toggles used by the previous build.
+        
         legacy_lelsploit = self._setting_bool(self.settings.value("proxy/autostart_lelsploit", False), False)
         legacy_roblox = self._setting_bool(self.settings.value("proxy/autostart_roblox", False), False)
         if legacy_roblox:
@@ -12130,7 +12332,7 @@ class LelSploitWindow(QMainWindow):
         if value not in {"first", "always", "manual"}:
             value = "manual"
         self.settings.setValue("proxy/start_behavior", value)
-        # Keep the superseded booleans inert if they exist in an older settings file.
+        
         self.settings.setValue("proxy/autostart_lelsploit", False)
         self.settings.setValue("proxy/autostart_roblox", False)
         self.settings.sync()
@@ -12162,6 +12364,8 @@ class LelSploitWindow(QMainWindow):
         return True
 
     def notify_user(self, title, message, duration=3500):
+        if self.screen_capture_hidden():
+            return
         if self.tray_icon is None:
             return
         if not self.tray_icon.isVisible():
@@ -12238,7 +12442,8 @@ class LelSploitWindow(QMainWindow):
         exit_action.triggered.connect(self.quit_application)
         self.tray_icon.setContextMenu(menu)
         self.tray_icon.activated.connect(self.on_tray_activated)
-        self.tray_icon.show()
+        if not self.screen_capture_hidden():
+            self.tray_icon.show()
 
     def on_tray_activated(self, reason):
         if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
@@ -12824,8 +13029,8 @@ class LelSploitWindow(QMainWindow):
             icon = app_icon("tab")
             for index in range(self.editor_tabs.count()):
                 self.editor_tabs.setTabIcon(index, icon)
-        # Do not rebuild the Extensions window just because icon tint changed.
-        # Rebuilding it during a theme pass used to cause unnecessary widget churn.
+        
+        
 
     def appearance_color(self, key, default):
         manager = getattr(self, "appearance_manager", None)
@@ -13026,9 +13231,9 @@ class LelSploitWindow(QMainWindow):
             if interactive:
                 QMessageBox.warning(self, "Local Roblox proxy", str(exc))
             return False
-        # In a Nuitka onefile build sys.executable is LelSploit.exe, so the app
-        # relaunches itself in proxy mode.  During source development we invoke
-        # main.pyw through Python with the same hidden mode flag.
+        
+        
+        
         executable = Path(sys.executable)
         if executable.name.casefold() in {"python.exe", "pythonw.exe", "python3.exe", "python3"} or executable.name.casefold().startswith("python"):
             command = [
@@ -13302,12 +13507,12 @@ class LelSploitWindow(QMainWindow):
             try:
                 clear_directory_contents(path)
             except Exception as exc:
-                # Roblox/API log directories can be locked while helper code exits.
+                
                 if path.name.casefold() != "logs":
                     errors.append(f"{path}: {exc}")
 
-        # Restore anything LelSploit patched outside its own folder before deleting
-        # the local records/backups needed to undo those changes.
+        
+        
         try:
             remove_matching_fastflags_from_roblox(self.load_fastflags())
             restore_all_modifications()
@@ -13327,7 +13532,7 @@ class LelSploitWindow(QMainWindow):
         self.proxy_process = None
         self.roblox_proxy_active = False
 
-        # Stop live extension/theme effects before their files are removed.
+        
         try:
             self.extension_runtime.retain_extensions(set())
             self.extension_smooth_scroll.retain_extensions(set())
@@ -13336,8 +13541,8 @@ class LelSploitWindow(QMainWindow):
         except Exception:
             pass
 
-        # Writable API directories live beside LelSploit, while the DLL/API runtime itself
-        # is required and must remain intact.
+        
+        
         for path in (
             BASE_DIR / "workspace",
             BASE_DIR / "logs",
@@ -13345,7 +13550,7 @@ class LelSploitWindow(QMainWindow):
         ):
             clear_owned_directory(path)
 
-        # Every standalone mutable state/cache file currently owned by LelSploit.
+        
         mutable_files = (
             FASTFLAGS_PATH, CUSTOM_FASTFLAGS_PATH, CUSTOM_FASTFLAG_STATE_PATH,
             FASTFLAG_CATALOG_CACHE_PATH, SETTINGS_PATH, SAVED_SCRIPTS_PATH,
@@ -13358,17 +13563,17 @@ class LelSploitWindow(QMainWindow):
             remove_file(path)
             remove_file(Path(path).with_name(Path(path).name + ".tmp"))
 
-        # User-installed/generated directories. Required assets (icons, images),
-        # Python/source files, proxy helper, curated fastflag_modules.json and DLL
-        # runtime files are deliberately not in this list.
+        
+        
+        
         for directory in (
             MOD_BACKUP_DIR, MOD_CACHE_DIR, FASTFLAG_BACKUP_DIR, PROXY_DIR,
             EXTENSIONS_DIR, EXTENSION_DATA_DIR, APPDATA_DIR / "__pycache__",
         ):
             remove_tree(directory)
 
-        # Clean common atomic-write leftovers created by LelSploit, without touching
-        # unrelated unknown files that may belong to the packaged runtime.
+        
+        
         for pattern in ("*.json.tmp", "*.lext.tmp"):
             try:
                 for path in BASE_DIR.glob(pattern):
@@ -13376,7 +13581,7 @@ class LelSploitWindow(QMainWindow):
             except Exception:
                 pass
 
-        # Reset in-memory state to match the now-empty disk state.
+        
         with self.settings.lock:
             self.settings.data.clear()
         try:
@@ -13410,7 +13615,7 @@ class LelSploitWindow(QMainWindow):
             self.fastflags_window.hide()
             self.fastflags_window = None
 
-        # Recreate only empty writable directories that normal operation expects.
+        
         try:
             EXTENSIONS_DIR.mkdir(parents=True, exist_ok=True)
         except Exception as exc:
@@ -14400,7 +14605,7 @@ class LelSploitWindow(QMainWindow):
                     sync_saved_modifications_to_roblox()
                     self.apply_saved_framerate_cap()
                     activate_username_proxy_runtime()
-                    # restart/restart_proxy are explicit FastFlags proxy actions and stay manual exceptions.
+                    
                     use_proxy = self.proxy_features_needed() and action in {"restart", "restart_proxy"}
                     if use_proxy:
                         self._set_proxy_runtime_suspended(False)
@@ -14580,7 +14785,12 @@ class LelSploitWindow(QMainWindow):
         self.poll_roblox()
 
     def closeEvent(self, event):
-        if not self._force_exit and self.close_behavior() == "tray" and self.tray_icon is not None:
+        if (
+            not self._force_exit
+            and not self.screen_capture_hidden()
+            and self.close_behavior() == "tray"
+            and self.tray_icon is not None
+        ):
             event.ignore()
             self.hide_to_tray(show_notice=True)
             return
@@ -14661,6 +14871,8 @@ def main():
             pass
 
         window.show()
+        if window.screen_capture_hidden():
+            QTimer.singleShot(0, window._apply_capture_exclusion)
         return app.exec()
     except Exception as exc:
         _report_startup_error(exc)
