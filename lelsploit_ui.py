@@ -3937,6 +3937,7 @@ class FastFlagListDialog(QDialog):
     def __init__(self, fastflags_window):
         super().__init__(fastflags_window)
         self.fastflags_window = fastflags_window
+        self.setObjectName("fastFlagListDialog")
         self.catalog = useful_fastflag_catalog()
         self.setWindowTitle("FastFlags List")
         self.resize(860, 600)
@@ -3950,6 +3951,11 @@ class FastFlagListDialog(QDialog):
 
         self.table = QTableWidget(0, 3)
         self.table.setObjectName("catalogTable")
+        self.table.setAutoFillBackground(False)
+        self.table.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.table.viewport().setAutoFillBackground(False)
+        self.table.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.table.viewport().setStyleSheet("background:transparent;border:0;")
         self.table.setHorizontalHeaderLabels(("Name", "Value", "Does"))
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
@@ -3981,13 +3987,14 @@ class FastFlagListDialog(QDialog):
         self.add_selected.clicked.connect(self._add_selection)
 
         self.setStyleSheet(r'''
-            QDialog, QWidget { background:#050505; color:#dedede; }
+            QDialog#fastFlagListDialog { background:#0b0c0d; color:#dedede; }
+            QWidget { color:#dedede; }
             QLabel { background:transparent; }
             QLineEdit { background:#0d0d0e; color:#ededed; border:1px solid #2a2a2d; border-radius:6px; min-height:32px; padding:0 9px; }
             QLineEdit:focus { background:#101012; border-color:#45454a; }
             QPushButton { background:#111113; color:#e9e9e9; border:1px solid #2a2a2d; border-radius:6px; padding:6px 11px; }
             QPushButton:hover { background:#19191c; border-color:#414146; }
-            QTableWidget#catalogTable { background:#080809; border:1px solid #252528; border-radius:7px; selection-background-color:#1a1b1d; selection-color:#fff; gridline-color:transparent; }
+            QTableWidget#catalogTable { background:transparent; alternate-background-color:transparent; border:1px solid #252528; border-radius:7px; selection-background-color:#1a1b1d; selection-color:#fff; gridline-color:transparent; }
             QTableWidget#catalogTable::item { padding:5px 7px; border-bottom:1px solid #151517; }
             QHeaderView::section { background:#0d0d0f; color:#bcbcbc; border:0; border-bottom:1px solid #252528; padding:7px; font-weight:600; }
         ''')
@@ -5508,7 +5515,8 @@ class ScriptBloxWindow(QDialog):
         self.poll_timer.timeout.connect(self.poll_events)
         self.poll_timer.start()
         self.setStyleSheet("""
-            QDialog, QWidget { background: #08090a; color: #e8e9ea; }
+            QDialog { background: #08090a; color: #e8e9ea; }
+            QWidget { background: transparent; color: #e8e9ea; }
             QLabel, QCheckBox { background: transparent; }
             QLabel { color: #b7bbbd; }
             QLineEdit { background: #0d0d0d; border: 1px solid #2b2b2b;
@@ -5524,7 +5532,8 @@ class ScriptBloxWindow(QDialog):
             QPushButton#savedScriptsButton:checked:hover { background: #322b12; border-color: #806f32; }
             QFrame#scriptCard { background: #090909; border: 1px solid #121212;
                 border-radius: 4px; }
-            QScrollArea { background: #050505; }
+            QScrollArea { background: transparent; border: none; }
+            QScrollArea > QWidget > QWidget { background: transparent; }
         """)
         apply_blur_style(self)
         self.prefill_current_game(refresh_on_change=False)
@@ -5889,7 +5898,7 @@ class HoverCopyLineEdit(QLineEdit):
 
 
 class ToolsWindow(QDialog):
-    TOOL_NAMES = ("Loadstring Reverser", "Loadstring Creator", "GitHub Rawifier")
+    TOOL_NAMES = ("Loadstring Reverser", "Loadstring Creator", "GitHub Rawifier", "Deobfuscate")
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -5930,6 +5939,7 @@ class ToolsWindow(QDialog):
         self._build_reverser_page()
         self._build_creator_page()
         self._build_github_page()
+        self._build_deobfuscate_page()
         self.select_tool(0)
 
         self.poll_timer = QTimer(self)
@@ -5937,8 +5947,14 @@ class ToolsWindow(QDialog):
         self.poll_timer.timeout.connect(self.poll_fetch)
         self.poll_timer.start()
 
+        self.deob_timer = QTimer(self)
+        self.deob_timer.setInterval(40)
+        self.deob_timer.timeout.connect(self.poll_deobfuscate)
+        self.deob_timer.start()
+
         self.setStyleSheet(r"""
-            QDialog, QWidget { background: #08090a; color: #e8e9ea; }
+            QDialog { background: #08090a; color: #e8e9ea; }
+            QWidget { background: transparent; color: #e8e9ea; }
             QLabel { background: transparent; color: #a8a8a8; }
             QStackedWidget#toolStack { background: transparent; border: none; }
             QPushButton#toolNavButton {
@@ -6050,10 +6066,10 @@ class ToolsWindow(QDialog):
         layout.addWidget(frame, 1)
         self.tool_stack.addWidget(page)
 
-    def _configure_fetch_syntax(self):
-        editor = self.fetch_output
+    def _configure_fetch_syntax(self, editor=None, lexer_attr="fetch_lexer"):
+        editor = self.fetch_output if editor is None else editor
         lexer = LuauLexer(editor)
-        self.fetch_lexer = lexer
+        setattr(self, lexer_attr, lexer)
         editor.SendScintilla(editor.SCI_SETLEXER, editor.SCLEX_NULL)
         editor.SendScintilla(editor.SCI_STYLESETFORE, editor.STYLE_DEFAULT, QColor("#eeeeee"))
         editor.SendScintilla(editor.SCI_STYLESETBACK, editor.STYLE_DEFAULT, QColor("#070708"))
@@ -6155,12 +6171,225 @@ class ToolsWindow(QDialog):
         layout.addStretch(1)
         self.tool_stack.addWidget(page)
 
+    def _build_deobfuscate_page(self):
+        page = QWidget()
+        layout = self._page_layout(page)
+
+        self.deob_input = QPlainTextEdit()
+        self.deob_input.setPlaceholderText("Paste obfuscated Lua/Luau here.")
+        self.deob_input.setFont(QFont("Consolas", 10))
+        self.deob_input.setFixedHeight(130)
+        layout.addWidget(self.deob_input)
+
+        input_actions = QHBoxLayout()
+        input_actions.setContentsMargins(0, 0, 0, 0)
+        input_actions.setSpacing(7)
+        self.deob_button = QPushButton("Deobfuscate")
+        self.deob_button.clicked.connect(self.start_deobfuscate)
+        input_actions.addWidget(self.deob_button, 1)
+        self.deob_new_tab_button = QPushButton("Open as New Script")
+        self.deob_new_tab_button.setEnabled(False)
+        new_icon = app_icon("new")
+        if not new_icon.isNull():
+            self.deob_new_tab_button.setIcon(new_icon)
+            self.deob_new_tab_button.setIconSize(QSize(16, 16))
+        self.deob_new_tab_button.clicked.connect(self.open_deobfuscated_as_script)
+        input_actions.addWidget(self.deob_new_tab_button)
+        layout.addLayout(input_actions)
+
+        self.deob_status = QLabel("")
+        self.deob_status.setTextFormat(Qt.TextFormat.PlainText)
+        self.deob_status.setWordWrap(True)
+        self.deob_status.hide()
+        layout.addWidget(self.deob_status)
+
+        frame = QFrame()
+        frame.setObjectName("toolOutputFrame")
+        frame_layout = QVBoxLayout(frame)
+        frame_layout.setContentsMargins(1, 1, 1, 1)
+        frame_layout.setSpacing(0)
+
+        self.deob_output = QsciScintilla(frame)
+        self.deob_output.setObjectName("toolOutput")
+        self.deob_output.setUtf8(True)
+        self.deob_output.setFont(QFont("Consolas", 10))
+        self.deob_output.setColor(QColor("#eeeeee"))
+        self.deob_output.setPaper(QColor("#070708"))
+        self.deob_output.setMargins(0)
+        self.deob_output.setWrapMode(QsciScintilla.WrapMode.WrapNone)
+        self.deob_output.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.deob_output.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.deob_output.setReadOnly(True)
+        self.deob_output.SendScintilla(self.deob_output.SCI_SETUNDOCOLLECTION, 0)
+        self.deob_output.SendScintilla(self.deob_output.SCI_SETLAYOUTCACHE, self.deob_output.SC_CACHE_PAGE)
+        self.deob_output.SendScintilla(self.deob_output.SCI_SETSCROLLWIDTH, 1)
+        self.deob_output.SendScintilla(self.deob_output.SCI_SETSCROLLWIDTHTRACKING, 1)
+        self._configure_fetch_syntax(self.deob_output, "deob_lexer")
+        frame_layout.addWidget(self.deob_output)
+        layout.addWidget(frame, 1)
+
+        self.deob_events = queue.Queue(maxsize=8)
+        self.deob_request_id = 0
+        self.deob_running = False
+        self.deob_result_text = ""
+        self.tool_stack.addWidget(page)
+
+    def show_deob_status(self, text):
+        self.deob_status.setText(str(text or ""))
+        self.deob_status.setVisible(bool(text))
+
+    @staticmethod
+    def _supported_deobfuscation_source(source):
+        try:
+            module = __import__("lelsploit_deobfuscate")
+            checker = getattr(module, "is_supported_obfuscated_format", None)
+            if checker is None:
+                checker = getattr(module, "is_supported_obfuscation", None)
+            if checker is None:
+                return False
+            return bool(checker(source))
+        except Exception:
+            return False
+
+    def prefill_deobfuscate(self, source):
+        source = str(source or "")
+        if source and self._supported_deobfuscation_source(source):
+            self.deob_input.setPlainText(source)
+            self.show_deob_status("")
+            return True
+        return False
+
+    def load_current_script_for_deobfuscate(self):
+        editor = getattr(self.owner, "editor", None)
+        if editor is None:
+            self.show_deob_status("No script tab is open.")
+            return False
+        try:
+            source = editor.text()
+        except MemoryError:
+            self.show_deob_status("Not enough memory to copy the current script.")
+            return False
+        if not source.strip():
+            return False
+        if self.prefill_deobfuscate(source):
+            return True
+        self.show_deob_status("")
+        return False
+
+    @staticmethod
+    def _run_deobfuscator(events, request_id, source):
+        try:
+            module = __import__("lelsploit_deobfuscate")
+            if hasattr(module, "deobfuscate"):
+                result, report = module.deobfuscate(source, return_report=True)
+            else:
+                engine = module.Deobfuscator()
+                result, report = engine.deobfuscate(source, return_report=True)
+            if isinstance(result, (bytes, bytearray)):
+                result = bytes(result).decode("latin-1")
+            result = str(result)
+            family = str(getattr(report, "best_family", "Unknown") or "Unknown")
+            passes = list(getattr(report, "passes", ()) or ())
+            warnings = list(getattr(report, "warnings", ()) or ())
+            status = f"LelSploit recognized {family}. Applied {len(passes)} pass{'es' if len(passes) != 1 else ''}."
+            if passes:
+                status += " " + "; ".join(str(item) for item in passes[:5])
+                if len(passes) > 5:
+                    status += f"; +{len(passes) - 5} more"
+            if warnings:
+                status += " Warning: " + str(warnings[0])
+            events.put(("done", request_id, result, status))
+        except Exception as exc:
+            events.put(("error", request_id, "", f"Deobfuscation failed: {exc}"))
+
+    def start_deobfuscate(self):
+        if self.deob_running:
+            return
+        source = self.deob_input.toPlainText()
+        if not source.strip():
+            self.show_deob_status("Paste an obfuscated script first.")
+            return
+        if not self._supported_deobfuscation_source(source):
+            self.show_deob_status("This is not a supported obfuscated format.")
+            return
+        self.deob_request_id += 1
+        request_id = self.deob_request_id
+        self.deob_running = True
+        self.deob_result_text = ""
+        self.deob_button.setEnabled(False)
+        self.deob_new_tab_button.setEnabled(False)
+        self.show_deob_status("Deobfuscating...")
+        self.deob_output.setReadOnly(False)
+        try:
+            self.deob_output.clear()
+        finally:
+            self.deob_output.setReadOnly(True)
+        threading.Thread(
+            target=self._run_deobfuscator,
+            args=(self.deob_events, request_id, source),
+            daemon=True,
+        ).start()
+
+    def poll_deobfuscate(self):
+        terminal = None
+        for _ in range(4):
+            try:
+                item = self.deob_events.get_nowait()
+            except queue.Empty:
+                break
+            kind, request_id, result, status = item
+            if request_id == self.deob_request_id:
+                terminal = (kind, result, status)
+        if terminal is None:
+            return
+        kind, result, status = terminal
+        self.deob_running = False
+        self.deob_button.setEnabled(True)
+        if kind == "done":
+            self.deob_result_text = result
+            data = result.encode("utf-8", errors="replace")
+            self.deob_output.setReadOnly(False)
+            try:
+                self.deob_output.setText(result)
+                self.deob_output.SendScintilla(self.deob_output.SCI_EMPTYUNDOBUFFER)
+                self.deob_output.SendScintilla(self.deob_output.SCI_COLOURISE, 0, -1)
+            finally:
+                self.deob_output.setReadOnly(True)
+            has_result = bool(data)
+            self.deob_new_tab_button.setEnabled(has_result)
+        else:
+            self.deob_result_text = ""
+            self.deob_new_tab_button.setEnabled(False)
+        self.show_deob_status(status)
+
+    def open_deobfuscated_as_script(self):
+        if not self.deob_result_text:
+            return
+        current_name = "script.luau"
+        try:
+            current_name = self.owner.current_tab_name() or current_name
+        except Exception:
+            pass
+        path = Path(current_name)
+        suffix = path.suffix if path.suffix.casefold() in {".lua", ".luau"} else ".luau"
+        name = f"{path.stem or 'script'}.deobfuscated{suffix}"
+        try:
+            self.owner.add_editor_tab(name, self.deob_result_text, select=True)
+            self.owner.update_editor_action_state()
+            self.owner.raise_()
+            self.owner.activateWindow()
+            self.show_deob_status("")
+        except Exception as exc:
+            self.show_deob_status(f"Could not open the deobfuscated script: {exc}")
+
     def select_tool(self, index):
         if index < 0 or index >= self.tool_stack.count():
             return
         self.tool_stack.setCurrentIndex(index)
         for button_index, button in enumerate(self.tool_buttons):
             button.setChecked(button_index == index)
+        if index == 3:
+            self.load_current_script_for_deobfuscate()
 
     def prefill_loadstring(self, source):
         if extract_loadstring_url(source):
@@ -6290,6 +6519,8 @@ class ToolsWindow(QDialog):
         self.fetch_to_script_button.setEnabled(
             self.fetch_output.SendScintilla(self.fetch_output.SCI_GETLENGTH) > 0
         )
+        if hasattr(self, "deob_button"):
+            self.deob_button.setEnabled(not self.deob_running)
         self.show_fetch_status("")
         event.accept()
 
@@ -9384,7 +9615,8 @@ class ExtensionsWindow(QDialog):
         layout.addWidget(self.scroll, 1)
 
         self.setStyleSheet(r"""
-            QDialog, QWidget { background: #08090a; color: #e8e9ea; }
+            QDialog { background: #08090a; color: #e8e9ea; }
+            QWidget { background: transparent; color: #e8e9ea; }
             QLabel { background: transparent; }
             QScrollArea#extensionScroll { background: transparent; border: none; }
             QFrame#extensionCard, QFrame#templateCard {
@@ -10377,7 +10609,8 @@ class SettingsWindow(QDialog):
         layout.addStretch(1)
 
         self.setStyleSheet("""
-            QDialog, QWidget { background: #08090a; color: #e8e9ea; }
+            QDialog { background: #08090a; color: #e8e9ea; }
+            QWidget { background: transparent; color: #e8e9ea; }
             QLabel, QCheckBox { background: transparent; }
             QWidget#syntaxColorRow { background: transparent; }
             QLabel { color: #b7bbbd; }
@@ -10814,6 +11047,7 @@ class FastFlagsWindow(QDialog):
         self.username_save_timer.setSingleShot(True)
         self.username_save_timer.setInterval(220)
         self.username_save_timer.timeout.connect(self.persist_username_spoofer)
+        self.setObjectName("fastFlagsWindow")
         self.setWindowTitle("FastFlags")
         self.resize(980, 700)
         self.setMinimumSize(780, 540)
@@ -10852,6 +11086,8 @@ class FastFlagsWindow(QDialog):
 
         self.stack = QStackedWidget()
         self.stack.setObjectName("clientStack")
+        self.stack.setAutoFillBackground(False)
+        self.stack.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.stack.addWidget(self.build_fastflag_page())
         self.stack.addWidget(self.build_custom_fastflags_page())
         self.stack.addWidget(self.build_assets_page())
@@ -10874,7 +11110,8 @@ class FastFlagsWindow(QDialog):
         outer.addWidget(self.restart_bar)
 
         self.setStyleSheet(r'''
-            QDialog, QWidget { background:#050505; color:#dedede; }
+            QDialog#fastFlagsWindow { background:#0b0c0d; color:#dedede; }
+            QWidget { color:#dedede; }
             QLabel { background:transparent; }
             QCheckBox { background:transparent; color:#f1f1f1; spacing:7px; }
             QCheckBox::indicator { width:16px; height:16px; border:1px solid #696969; border-radius:3px; background:#090909; }
@@ -10886,6 +11123,8 @@ class FastFlagsWindow(QDialog):
             QPushButton#clientNav:hover { color:#eee; background:#101010; }
             QPushButton#clientNav:checked { color:#fff; background:#171717; }
             QStackedWidget#clientStack { border:0; background:transparent; }
+            QStackedWidget#clientStack > QWidget { border:0; background:transparent; }
+            QWidget#fastFlagsPage, QWidget#customFastFlagsPage, QWidget#assetsPage, QWidget#usernamePage, QWidget#customModsPage { background:transparent; border:0; }
             QFrame#fastFlagCard, QFrame#modRow { background:#0b0b0b; border:1px solid #242424; border-radius:7px; }
             QFrame#fastFlagManagerCard { background:#0d0d0d; border:1px solid #2b2b2b; border-radius:7px; }
             QLabel#sectionTitle { color:#8e8e8e; font-size:11px; font-weight:600; padding:7px 2px 2px; }
@@ -10905,7 +11144,7 @@ class FastFlagsWindow(QDialog):
             QPlainTextEdit#customFlagEditor { background:#09090a; color:#e8e8e8; border:1px solid #28282b; border-radius:7px; padding:8px; selection-background-color:#303033; }
             QPlainTextEdit#customFlagEditor[invalid="true"] { border-color:#8b3a3a; }
             QLabel#customFlagStatus { color:#888; background:transparent; }
-            QTableWidget#customFlagTable { background:#080809; alternate-background-color:#0b0b0c; border:1px solid #252528; border-radius:7px; gridline-color:transparent; selection-background-color:#18191b; selection-color:#f0f0f0; }
+            QTableWidget#customFlagTable { background:transparent; alternate-background-color:transparent; border:1px solid #252528; border-radius:7px; gridline-color:transparent; selection-background-color:#18191b; selection-color:#f0f0f0; }
             QTableWidget#customFlagTable::item { padding:6px 7px; border-bottom:1px solid #151517; }
             QHeaderView::section { background:#0d0d0f; color:#bcbcbc; border:0; border-bottom:1px solid #252528; padding:7px; font-weight:600; }
             QPushButton#hotkeyButton { background:#101012; border:1px solid #2d2d31; border-radius:5px; padding:0 9px; color:#d6d6d6; }
@@ -10942,6 +11181,8 @@ class FastFlagsWindow(QDialog):
 
     def build_fastflag_page(self):
         page = QWidget()
+        page.setObjectName("fastFlagsPage")
+        page.setAutoFillBackground(False)
         page_layout = QVBoxLayout(page)
         page_layout.setContentsMargins(0, 0, 0, 0)
         scroll = QScrollArea()
@@ -11013,6 +11254,8 @@ class FastFlagsWindow(QDialog):
 
     def build_custom_fastflags_page(self):
         page = QWidget()
+        page.setObjectName("customFastFlagsPage")
+        page.setAutoFillBackground(False)
         root = QVBoxLayout(page)
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(10)
@@ -11061,6 +11304,11 @@ class FastFlagsWindow(QDialog):
 
         self.custom_flag_table = QTableWidget(0, 4)
         self.custom_flag_table.setObjectName("customFlagTable")
+        self.custom_flag_table.setAutoFillBackground(False)
+        self.custom_flag_table.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.custom_flag_table.viewport().setAutoFillBackground(False)
+        self.custom_flag_table.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.custom_flag_table.viewport().setStyleSheet("background:transparent;border:0;")
         self.custom_flag_table.setHorizontalHeaderLabels(("Name", "Value", "Status", "Hotkey"))
         self.custom_flag_table.verticalHeader().setVisible(False)
         self.custom_flag_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -11366,6 +11614,7 @@ class FastFlagsWindow(QDialog):
     def add_custom_fastflag(self):
         catalog = useful_fastflag_catalog()
         dialog = QDialog(self)
+        dialog.setObjectName("addCustomFastFlagDialog")
         dialog.setWindowTitle("Add Custom FastFlag")
         dialog.resize(570, 390)
         dialog.setMinimumSize(500, 330)
@@ -11434,7 +11683,8 @@ class FastFlagsWindow(QDialog):
         value.returnPressed.connect(dialog.accept)
 
         dialog.setStyleSheet(r'''
-            QDialog, QWidget { background:#050505; color:#dedede; }
+            QDialog#addCustomFastFlagDialog { background:#0b0c0d; color:#dedede; }
+            QWidget { color:#dedede; }
             QLabel { background:transparent; }
             QLineEdit { background:#0d0d0e; color:#ededed; border:1px solid #2a2a2d; border-radius:6px; min-height:33px; padding:0 9px; }
             QLineEdit:focus { background:#101012; border-color:#45454a; }
@@ -11558,7 +11808,7 @@ class FastFlagsWindow(QDialog):
         return spin
 
     def build_assets_page(self):
-        page = QWidget(); root = QVBoxLayout(page); root.setContentsMargins(0,0,0,0)
+        page = QWidget(); page.setObjectName("assetsPage"); page.setAutoFillBackground(False); root = QVBoxLayout(page); root.setContentsMargins(0,0,0,0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         content = QWidget(); layout = QVBoxLayout(content); layout.setContentsMargins(1,1,1,1); layout.setSpacing(7)
         font_title = QLabel("Custom Font"); font_title.setObjectName("sectionTitle"); layout.addWidget(font_title)
@@ -11593,6 +11843,8 @@ class FastFlagsWindow(QDialog):
 
     def build_username_page(self):
         page = QWidget()
+        page.setObjectName("usernamePage")
+        page.setAutoFillBackground(False)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(14, 12, 14, 14)
         layout.setSpacing(14)
@@ -11695,6 +11947,8 @@ class FastFlagsWindow(QDialog):
 
     def build_custom_page(self):
         page = QWidget()
+        page.setObjectName("customModsPage")
+        page.setAutoFillBackground(False)
         layout = QVBoxLayout(page)
         layout.setContentsMargins(4, 4, 4, 4)
         layout.setSpacing(12)
