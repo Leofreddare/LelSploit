@@ -11,6 +11,7 @@ import re
 import sys
 import threading
 import time
+import urllib.request
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QRectF, QPoint, QObject, pyqtSignal, QPropertyAnimation, QEasingCurve
@@ -685,6 +686,19 @@ class FastFlagsWindow(QDialog):
         add_button = QPushButton("Add flag")
         import_button = QPushButton("Import JSON")
         export_button = QPushButton("Export JSON")
+
+        fastflags_icon = app_icon("fastflags")
+        if not fastflags_icon.isNull():
+            add_button.setIcon(fastflags_icon)
+            add_button.setIconSize(QSize(16, 16))
+
+        json_icon = app_icon("json")
+        if not json_icon.isNull():
+            import_button.setIcon(json_icon)
+            import_button.setIconSize(QSize(16, 16))
+            export_button.setIcon(json_icon)
+            export_button.setIconSize(QSize(16, 16))
+
         add_button.clicked.connect(self.add_custom_fastflag)
         import_button.clicked.connect(self.import_custom_fastflags)
         export_button.clicked.connect(self.export_custom_fastflags)
@@ -1004,7 +1018,20 @@ class FastFlagsWindow(QDialog):
             reset.setEnabled(current_binding is not None)
 
     def add_custom_fastflag(self):
-        catalog = useful_fastflag_catalog()
+        tracker_url = "https://raw.githubusercontent.com/MaximumADHD/Roblox-FFlag-Tracker/main/PCDesktopClient.json"
+        tracker_flags = {}
+        try:
+            request = urllib.request.Request(
+                tracker_url,
+                headers={"User-Agent": "LelSploit-FastFlags/1.0"},
+            )
+            with urllib.request.urlopen(request, timeout=8) as response:
+                remote_data = json.loads(response.read().decode("utf-8"))
+            if isinstance(remote_data, dict):
+                tracker_flags = {str(flag_name): flag_value for flag_name, flag_value in remote_data.items()}
+        except Exception as exc:
+            self.owner.log(f"Could not load Roblox FFlag Tracker suggestions: {exc}", "warning")
+
         dialog = QDialog(self)
         dialog.setObjectName("addCustomFastFlagDialog")
         dialog.setWindowTitle("Add Custom FastFlag")
@@ -1024,11 +1051,6 @@ class FastFlagsWindow(QDialog):
         value.setPlaceholderText("Value")
         root.addWidget(value)
 
-        info = QLabel("The list contains curated suggestions. Any other FastFlag name is still accepted.")
-        info.setStyleSheet("color:#85858a;background:transparent;")
-        info.setWordWrap(True)
-        root.addWidget(info)
-
         actions = QHBoxLayout()
         add = QPushButton("Add")
         cancel = QPushButton("Cancel")
@@ -1037,22 +1059,26 @@ class FastFlagsWindow(QDialog):
         actions.addWidget(add)
         root.addLayout(actions)
 
+        def value_text(raw_value):
+            if isinstance(raw_value, bool):
+                return "true" if raw_value else "false"
+            if raw_value is None:
+                return ""
+            return str(raw_value)
+
         def update_suggestions(text_value=""):
             query = str(text_value or "").strip().casefold()
             suggestions.clear()
             matches = []
-            for flag_name, meta in catalog.items():
-                haystack = (flag_name + " " + str(meta.get("category", "")) + " " + " ".join(meta.get("presets", ()))).casefold()
-                if query and query not in haystack:
+            for flag_name, flag_value in tracker_flags.items():
+                if query and query not in flag_name.casefold():
                     continue
-                matches.append((flag_name, meta))
+                matches.append((flag_name, flag_value))
             matches.sort(key=lambda item: (0 if item[0].casefold().startswith(query) else 1, item[0].casefold()))
-            for flag_name, meta in matches[:80]:
+            for flag_name, flag_value in matches[:80]:
                 item = QListWidgetItem(flag_name)
                 item.setData(Qt.ItemDataRole.UserRole, flag_name)
-                detail = str(meta.get("value", ""))
-                source = str(meta.get("source", ""))
-                item.setToolTip(f"{source} · default value: {detail}" if source else f"Default value: {detail}")
+                item.setToolTip(f"Current tracker value: {value_text(flag_value)}")
                 suggestions.addItem(item)
 
         def choose_item(item):
@@ -1060,9 +1086,8 @@ class FastFlagsWindow(QDialog):
                 return
             flag_name = str(item.data(Qt.ItemDataRole.UserRole) or item.text()).strip()
             name.setText(flag_name)
-            meta = catalog.get(flag_name, {})
             if not value.text().strip():
-                value.setText(str(meta.get("value", "")))
+                value.setText(value_text(tracker_flags.get(flag_name, "")))
             value.setFocus()
             value.selectAll()
 
