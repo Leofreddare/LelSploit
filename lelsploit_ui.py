@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 import traceback
+import uuid
 import xml.etree.ElementTree as ET
 import urllib.error
 import urllib.parse
@@ -61,9 +62,10 @@ EXTENSIONS_DIR = BASE_DIR / "extensions"
 EXTENSION_DATA_DIR = BASE_DIR / "extension_data"
 EXTENSION_STATE_PATH = BASE_DIR / "extensions_state.json"
 EXTENSION_FORMAT_VERSION = 1
+EXTENSION_API_VERSION = 4
 EXTENSION_MANIFEST_LIMIT = 256 * 1024
 EXTENSION_ICON_LIMIT = 2 * 1024 * 1024
-EXTENSION_PACKAGE_LIMIT = 32 * 1024 * 1024
+EXTENSION_PACKAGE_LIMIT = 10 * 1024 * 1024
 EXTENSION_TEXT_LIMIT = 8 * 1024 * 1024
 EXTENSION_NETWORK_LIMIT = 2 * 1024 * 1024
 SCRIPTBLOX_API = "https://scriptblox.com/api/script"
@@ -574,29 +576,13 @@ def write_json_object(path, value):
     os.replace(temp, path)
 
 
-def scriptblox_script_key(script):
-    if not isinstance(script, dict):
-        return ""
-    game_data = script.get("game") if isinstance(script.get("game"), dict) else {}
-    return str(script.get("_id") or script.get("slug") or (
-        str(script.get("title")) + "\0" + str(game_data.get("name"))
-    ))
+                                                        
 
 
-def load_saved_scripts():
-    value = read_json_object(SAVED_SCRIPTS_PATH, {})
-    return {
-        str(key): item for key, item in value.items()
-        if isinstance(key, str) and isinstance(item, dict)
-    }
+                                                     
 
 
-def save_saved_scripts(value):
-    clean = {
-        str(key): item for key, item in value.items()
-        if isinstance(key, str) and isinstance(item, dict)
-    }
-    write_json_object(SAVED_SCRIPTS_PATH, clean)
+                                                     
 
 
 def clear_directory_contents(path):
@@ -1581,11 +1567,7 @@ def configure_windows_identity():
         pass
 
 
-def read_limited(response, limit=SCRIPTBLOX_RESPONSE_LIMIT):
-    data = response.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError("ScriptBlox response was too large.")
-    return data
+                                               
 
 
 def extract_loadstring_url(source):
@@ -1688,115 +1670,13 @@ def stream_remote_text(output, request_id, url, cancelled, limit=TOOL_FETCH_LIMI
 SCRIPTBLOX_USER_AGENT = "LelSploit ScriptBloxApi/1.0"
 
 
-def scriptblox_curl_bytes(url, accept, timeout=12):
-    curl = shutil.which("curl.exe") or shutil.which("curl")
-    if not curl:
-        raise OSError("curl is not available")
-    result = subprocess.run(
-        [
-            curl, "-fLsS", "--compressed",
-            "--connect-timeout", str(max(1, min(int(timeout), 10))),
-            "--max-time", str(max(1, int(timeout))),
-            "--retry", "2", "--retry-all-errors", "--retry-delay", "1",
-            "-A", SCRIPTBLOX_USER_AGENT,
-            "-H", f"Accept: {accept}",
-            "-H", "Cache-Control: no-cache",
-            "-H", "Referer: https://scriptblox.com/",
-            url,
-        ],
-        capture_output=True,
-        timeout=max(3, int(timeout) + 4),
-        creationflags=NO_WINDOW,
-        check=False,
-    )
-    if result.returncode != 0:
-        detail = result.stderr.decode("utf-8", errors="replace").strip()
-        raise ConnectionError(detail or f"curl failed with exit code {result.returncode}.")
-    if len(result.stdout) > SCRIPTBLOX_RESPONSE_LIMIT:
-        raise ValueError("ScriptBlox response was too large.")
-    return result.stdout
+                                                        
 
 
-def scriptblox_request_bytes(url, accept, timeout=20):
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": accept,
-            "User-Agent": SCRIPTBLOX_USER_AGENT,
-        },
-    )
-    retry_statuses = {429, 502, 503, 504}
-    last_error = None
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                return read_limited(response)
-        except urllib.error.HTTPError as exc:
-            last_error = exc
-            if exc.code in retry_statuses and attempt < 2:
-                retry_after = 0.0
-                if exc.code == 429:
-                    try:
-                        retry_after = float(exc.headers.get("Retry-After", 0) or 0)
-                    except (TypeError, ValueError):
-                        retry_after = 0.0
-                time.sleep(min(4.0, max(retry_after, 0.45 * (2 ** attempt))))
-                continue
-            break
-        except urllib.error.URLError as exc:
-            last_error = exc
-            if attempt < 2:
-                time.sleep(0.45 * (2 ** attempt))
-                continue
-            break
-
-    if isinstance(last_error, urllib.error.HTTPError):
-        detail = ""
-        try:
-            body = last_error.read(4096).decode("utf-8", errors="replace")
-            payload = json.loads(body)
-            if isinstance(payload, dict):
-                detail = str(payload.get("message", "") or "").strip()
-        except Exception:
-            pass
-        raise ConnectionError(
-            detail or f"ScriptBlox request failed (HTTP {last_error.code})."
-        ) from last_error
-
-    try:
-        return scriptblox_curl_bytes(url, accept, timeout)
-    except Exception as curl_exc:
-        if isinstance(last_error, urllib.error.URLError):
-            reason = getattr(last_error, "reason", last_error)
-            raise ConnectionError(f"Could not reach ScriptBlox: {reason}") from last_error
-        raise ConnectionError(f"Could not reach ScriptBlox: {curl_exc}") from curl_exc
+                                                           
 
 
-def scriptblox_catalog_request(endpoint, parameter_sets):
-    errors = []
-    seen = set()
-    for params in parameter_sets:
-        query = urllib.parse.urlencode(params)
-        url = f"{SCRIPTBLOX_API}/{endpoint}" + (f"?{query}" if query else "")
-        if url in seen:
-            continue
-        seen.add(url)
-        try:
-            raw = scriptblox_request_bytes(url, "application/json")
-            payload = json.loads(raw.decode("utf-8-sig"))
-            if not isinstance(payload, dict):
-                raise ValueError("ScriptBlox returned an invalid response.")
-            if payload.get("message"):
-                raise ValueError(str(payload["message"]))
-            result = payload.get("result")
-            if not isinstance(result, dict) or not isinstance(result.get("scripts"), list):
-                raise ValueError("ScriptBlox returned an invalid result.")
-            return result
-        except Exception as exc:
-            errors.append(str(exc))
-    if errors:
-        raise ConnectionError(errors[-1])
-    raise ConnectionError("ScriptBlox did not return a usable response.")
+                                                             
 
 
 
@@ -1804,269 +1684,19 @@ SCRIPTBLOX_SITE = "https://scriptblox.com"
 SCRIPTBLOX_RAW_SITE = "https://rawscripts.net/raw"
 
 
-def _scriptblox_title_from_slug(slug):
-    text = urllib.parse.unquote(str(slug or "")).strip("/")
-    text = re.sub(r"-\d+$", "", text)
-    text = text.replace("-", " ").replace("_", " ")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text or "Untitled script"
+                                                              
 
 
-def _scriptblox_parse_site_scripts(document, keyless=False):
-    
-    
-    pattern = re.compile(
-        r'<a\b[^>]*href\s*=\s*(?P<q>["\'])'
-        r'(?:(?:https?:)?//(?:www\.)?scriptblox\.com)?'
-        r'(?P<href>/script/[^"\']+)(?P=q)[^>]*>(?P<body>.*?)</a>',
-        re.IGNORECASE | re.DOTALL,
-    )
-    scripts = []
-    seen = set()
-    for match in pattern.finditer(document):
-        href = html.unescape(match.group("href"))
-        slug = href.split("/script/", 1)[-1].split("?", 1)[0].split("#", 1)[0].strip("/")
-        if not slug or slug in seen:
-            continue
-        body = re.sub(r"<[^>]+>", " ", match.group("body"))
-        body = html.unescape(re.sub(r"\s+", " ", body)).strip()
-        lowered = body.casefold()
-        has_key = "key system" in lowered
-        if keyless and has_key:
-            continue
-        paid = bool(re.search(r"\bpaid\b", lowered))
-        universal = "universal script" in lowered
-        patched = "patched" in lowered and "unpatched" not in lowered and "not patched" not in lowered
-        seen.add(slug)
-        scripts.append({
-            "_id": slug,
-            "slug": slug,
-            "title": _scriptblox_title_from_slug(slug),
-            "game": {"name": "Universal" if universal else "ScriptBlox"},
-            "verified": "verified" in lowered,
-            "key": has_key,
-            "views": None,
-            "scriptType": "paid" if paid else "free",
-            "isUniversal": universal,
-            "isPatched": patched,
-            "_lelsploit_raw_url": f"{SCRIPTBLOX_RAW_SITE}/{urllib.parse.quote(slug, safe='')}",
-        })
-        if len(scripts) >= 20:
-            break
-    return scripts
+                                                                 
 
 
-def scriptblox_web_catalog(script_query, game_query, keyless, page):
-    
-    
-    if int(page or 1) != 1:
-        return {"scripts": [], "totalPages": 1, "nextPage": None, "_lelsploit_web": True}
-
-    script_query = str(script_query or "").strip()
-    game_query = str(game_query or "").strip()
-    numeric_place = game_query.isdecimal()
-    text_terms = [script_query]
-    if game_query and not numeric_place:
-        text_terms.append(game_query)
-    query = " ".join(term for term in text_terms if term).strip()
-
-    urls = []
-    if numeric_place:
-        
-        
-        urls.append(f"{SCRIPTBLOX_SITE}/game/{urllib.parse.quote(game_query, safe='')}")
-    if query:
-        urls.append(f"{SCRIPTBLOX_SITE}/?{urllib.parse.urlencode({'q': query})}")
-    else:
-        
-        
-        urls.append(f"{SCRIPTBLOX_SITE}/trending")
-
-    last_error = None
-    for url in urls:
-        try:
-            raw = scriptblox_request_bytes(url, "text/html,application/xhtml+xml")
-            document = raw.decode("utf-8", errors="replace")
-            scripts = _scriptblox_parse_site_scripts(document, keyless=keyless)
-            if scripts:
-                return {
-                    "scripts": scripts,
-                    "totalPages": 1,
-                    "nextPage": None,
-                    "_lelsploit_web": True,
-                }
-        except Exception as exc:
-            last_error = exc
-
-    if numeric_place and not query:
-        
-        
-        try:
-            raw = scriptblox_request_bytes(
-                f"{SCRIPTBLOX_SITE}/trending", "text/html,application/xhtml+xml"
-            )
-            scripts = _scriptblox_parse_site_scripts(raw.decode("utf-8", errors="replace"), keyless=keyless)
-            if scripts:
-                return {
-                    "scripts": scripts,
-                    "totalPages": 1,
-                    "nextPage": None,
-                    "_lelsploit_web": True,
-                }
-        except Exception as exc:
-            last_error = exc
-
-    if last_error is not None:
-        raise ConnectionError(str(last_error)) from last_error
-    raise ConnectionError("ScriptBlox website did not return script cards.")
+                                                         
 
 
-def scriptblox_raw_source(script_id, slug=None):
-    script_id = str(script_id or "").strip()
-    slug = str(slug or "").strip()
-    candidates = []
-    if script_id:
-        candidates.append(f"{SCRIPTBLOX_API}/raw/{urllib.parse.quote(script_id, safe='')}")
-    if slug and slug != script_id:
-        candidates.append(f"{SCRIPTBLOX_API}/raw/{urllib.parse.quote(slug, safe='')}")
-    raw_slug = slug or script_id
-    if raw_slug:
-        
-        candidates.append(f"{SCRIPTBLOX_RAW_SITE}/{urllib.parse.quote(raw_slug, safe='')}")
-
-    last_error = None
-    for url in candidates:
-        try:
-            code = scriptblox_request_bytes(url, "text/plain,*/*;q=0.8").decode("utf-8-sig")
-            if code.strip():
-                return code
-        except Exception as exc:
-            last_error = exc
-    if last_error is not None:
-        raise last_error
-    raise ValueError("ScriptBlox returned an empty script.")
+                                                        
 
 
-def fetch_scriptblox(output, request_id, script_query, game_query,
-                     sort_by, keyless, page, append):
-    script_query = script_query.strip()
-    game_query = game_query.strip()
-    numeric_place = game_query.isdecimal()
-    terms = [script_query]
-    if game_query and not numeric_place:
-        terms.append(game_query)
-    query = " ".join(term for term in terms if term)
-    endpoint = "search" if query else "fetch"
-
-    full = {
-        "max": 12,
-        "page": page,
-        "sortBy": sort_by,
-        "order": "desc",
-        "mode": "free",
-        "patched": 0,
-    }
-    if query:
-        full["q"] = query
-        full["strict"] = "false"
-    if numeric_place:
-        full["placeId"] = game_query
-    if keyless:
-        full["key"] = 0
-
-    
-    
-    
-    stable = {
-        "page": page,
-        "max": 20,
-        "sortBy": sort_by,
-        "order": "desc",
-    }
-    if query:
-        stable["q"] = query
-        stable["strict"] = "false"
-    if numeric_place:
-        stable["placeId"] = game_query
-
-    baseline = {"page": page, "max": 20}
-    if query:
-        baseline["q"] = query
-
-    try:
-        try:
-            result = scriptblox_catalog_request(endpoint, (full, stable, baseline))
-        except Exception:
-            result = scriptblox_web_catalog(script_query, game_query, keyless, page)
-        web_fallback = bool(result.get("_lelsploit_web"))
-        scripts = [item for item in result.get("scripts", []) if isinstance(item, dict)]
-
-        if keyless:
-            scripts = [item for item in scripts if not bool(item.get("key"))]
-        scripts = [
-            item for item in scripts
-            if str(item.get("scriptType", "free")).casefold() != "paid"
-            and not bool(item.get("isPatched"))
-        ]
-
-        if game_query and not numeric_place and not web_fallback:
-            wanted = game_query.casefold()
-            scripts = [
-                item for item in scripts
-                if wanted in str(
-                    item.get("game", {}).get("name", "")
-                    if isinstance(item.get("game"), dict) else ""
-                ).casefold()
-            ]
-        elif numeric_place:
-            wanted = str(game_query)
-            matching = []
-            for item in scripts:
-                game_data = item.get("game") if isinstance(item.get("game"), dict) else {}
-                identifiers = {
-                    str(game_data.get("gameId", "")),
-                    str(game_data.get("placeId", "")),
-                    str(game_data.get("_id", "")),
-                }
-                if wanted in identifiers:
-                    matching.append(item)
-            
-            
-            if matching:
-                scripts = matching
-
-        if sort_by in {"views", "likeCount"}:
-            scripts.sort(
-                key=lambda item: float(item.get(sort_by, 0) or 0),
-                reverse=True,
-            )
-        elif sort_by in {"createdAt", "updatedAt"}:
-            scripts.sort(key=lambda item: str(item.get(sort_by, "")), reverse=True)
-
-        scripts = scripts[:12]
-        total_pages = result.get("totalPages", page)
-        try:
-            total_pages = max(page, int(total_pages))
-        except (TypeError, ValueError):
-            total_pages = page
-        next_page = result.get("nextPage")
-        try:
-            next_page = int(next_page) if next_page is not None else None
-        except (TypeError, ValueError):
-            next_page = page + 1 if page < total_pages else None
-        if next_page is None and page < total_pages:
-            next_page = page + 1
-        if next_page is not None and next_page <= page:
-            next_page = None
-        output.put(("catalog", request_id, {
-            "scripts": scripts,
-            "page": page,
-            "total_pages": total_pages,
-            "next_page": next_page,
-            "append": append,
-        }))
-    except Exception as exc:
-        output.put(("catalog_error", request_id, str(exc)))
+                                                   
 
 
 def roblox_processes():
@@ -2360,20 +1990,10 @@ def end_roblox():
         raise TimeoutError("Roblox is still running.")
 
 
-def fetch_scriptblox_raw(output, script_id, title, slug=None):
-    try:
-        code = scriptblox_raw_source(script_id, slug)
-        output.put(("install", title, code))
-    except Exception as exc:
-        output.put(("install_error", title, str(exc)))
+                                                       
 
 
-def fetch_scriptblox_saved_raw(output, key, script_id, slug=None):
-    try:
-        code = scriptblox_raw_source(script_id, slug)
-        output.put(("save", key, code))
-    except Exception as exc:
-        output.put(("save_error", key, str(exc)))
+                                                             
 
 
 def stream_file(path, output, cancelled):
@@ -2524,8 +2144,146 @@ class CaptureExclusionService(QObject):
         return False
 
 
+class ExtensionWindowResizeService(QObject):
+    def __init__(self, owner):
+        super().__init__(owner)
+        self.owner = owner
+        self._claims = {}
+        self._base_enabled = True
+        self._base_border = 7
+        self._installed = False
+        self._cursor_widget = None
+        self._apply_state()
+
+    def set_extension(self, ext_id, enabled=True, border=7):
+        ext_id = str(ext_id or "").strip()
+        if not ext_id:
+            return
+        if enabled:
+            try:
+                border = max(4, min(16, int(border)))
+            except (TypeError, ValueError):
+                border = 7
+            self._claims[ext_id] = border
+        else:
+            self._claims.pop(ext_id, None)
+        self._apply_state()
+
+    def enabled_for(self, ext_id):
+        return self._base_enabled or str(ext_id or "").strip() in self._claims
+
+    def retain_extensions(self, enabled_ids):
+        enabled_ids = set(enabled_ids or ())
+        for ext_id in list(self._claims):
+            if ext_id not in enabled_ids:
+                self._claims.pop(ext_id, None)
+        self._apply_state()
+
+    def _apply_state(self):
+        app = QApplication.instance()
+        active = (self._base_enabled or bool(self._claims)) and app is not None
+        if active and not self._installed:
+            app.installEventFilter(self)
+            self._installed = True
+        elif not active and self._installed:
+            try:
+                app.removeEventFilter(self)
+            except Exception:
+                pass
+            self._installed = False
+            self._reset_cursor()
+
+    def _reset_cursor(self):
+        widget = self._cursor_widget
+        self._cursor_widget = None
+        if isinstance(widget, QWidget):
+            try:
+                widget.unsetCursor()
+            except RuntimeError:
+                pass
+
+    def _border(self):
+        values = [self._base_border] if self._base_enabled else []
+        values.extend(self._claims.values())
+        return max(values) if values else 7
+
+    @staticmethod
+    def _eligible_window(window):
+        if not isinstance(window, QWidget) or not window.isWindow():
+            return False
+        if getattr(window, "_blur_title_bar", None) is None:
+            return False
+        if window.windowType() in {Qt.WindowType.Popup, Qt.WindowType.ToolTip, Qt.WindowType.SplashScreen, Qt.WindowType.Desktop}:
+            return False
+        if window.minimumWidth() == window.maximumWidth() and window.minimumHeight() == window.maximumHeight():
+            return False
+        return True
+
+    def _edges_at(self, window, global_point):
+        if not self._eligible_window(window) or window.isMaximized() or window.isFullScreen() or not window.isVisible():
+            return Qt.Edge(0)
+        local = window.mapFromGlobal(global_point)
+        border = self._border()
+        edges = Qt.Edge(0)
+        if local.x() <= border:
+            edges |= Qt.Edge.LeftEdge
+        elif local.x() >= window.width() - border - 1:
+            edges |= Qt.Edge.RightEdge
+        if local.y() <= border:
+            edges |= Qt.Edge.TopEdge
+        elif local.y() >= window.height() - border - 1:
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    @staticmethod
+    def _cursor_for_edges(edges):
+        left = bool(edges & Qt.Edge.LeftEdge)
+        right = bool(edges & Qt.Edge.RightEdge)
+        top = bool(edges & Qt.Edge.TopEdge)
+        bottom = bool(edges & Qt.Edge.BottomEdge)
+        if (left and top) or (right and bottom):
+            return Qt.CursorShape.SizeFDiagCursor
+        if (right and top) or (left and bottom):
+            return Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return Qt.CursorShape.SizeHorCursor
+        if top or bottom:
+            return Qt.CursorShape.SizeVerCursor
+        return None
+
+    def eventFilter(self, watched, event):
+        if not (self._base_enabled or self._claims) or not isinstance(watched, QWidget):
+            return False
+        try:
+            window = watched.window()
+            if not self._eligible_window(window):
+                return False
+            event_type = event.type()
+            if event_type in {QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress}:
+                global_point = event.globalPosition().toPoint()
+                edges = self._edges_at(window, global_point)
+                shape = self._cursor_for_edges(edges)
+                if shape is not None:
+                    if self._cursor_widget is not watched:
+                        self._reset_cursor()
+                        self._cursor_widget = watched
+                    watched.setCursor(shape)
+                elif self._cursor_widget is not None:
+                    self._reset_cursor()
+                if event_type == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton and edges:
+                    handle = window.windowHandle()
+                    if handle is not None and handle.startSystemResize(edges):
+                        event.accept()
+                        return True
+            elif event_type in {QEvent.Type.Leave, QEvent.Type.WindowStateChange, QEvent.Type.Hide}:
+                self._reset_cursor()
+        except (RuntimeError, AttributeError, TypeError):
+            self._reset_cursor()
+        return False
+
+
 class SmoothScrollService(QObject):
-    """Global wheel/trackpad smoothing. Extensions may tune it, but it is built in by default."""
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._claims = {}
@@ -3392,6 +3150,15 @@ class EditorPage(QWidget):
         layout.addWidget(editor)
 
 
+def _sync_extension_titlebar(titlebar):
+    runtime = globals().get("_ACTIVE_LEXT_RUNTIME")
+    if runtime is not None:
+        try:
+            runtime.sync_titlebar(titlebar)
+        except Exception:
+            pass
+
+
 class BlurTitleBar(QFrame):
     ROUND_RADIUS = 12
 
@@ -3474,6 +3241,7 @@ class BlurTitleBar(QFrame):
         self._topmost_timer.timeout.connect(self._refresh_topmost)
         window.installEventFilter(self)
         QTimer.singleShot(0, self._sync_native_window)
+        QTimer.singleShot(0, lambda: _sync_extension_titlebar(self))
 
     def toggle_rollup(self):
         body = getattr(self.owner_window, "_blur_body", None)
@@ -3692,371 +3460,40 @@ MOD_SHIFT = 0x04
 MOD_WIN = 0x08
 
 
-def _modifier_bit_for_vk(vk):
-    if vk in (0x11, 0xA2, 0xA3):
-        return MOD_CTRL
-    if vk in (0x12, 0xA4, 0xA5):
-        return MOD_ALT
-    if vk in (0x10, 0xA0, 0xA1):
-        return MOD_SHIFT
-    if vk in (0x5B, 0x5C):
-        return MOD_WIN
-    return 0
+                                                      
 
 
-def _qt_modifier_mask(modifiers):
-    mask = 0
-    if modifiers & Qt.KeyboardModifier.ControlModifier:
-        mask |= MOD_CTRL
-    if modifiers & Qt.KeyboardModifier.AltModifier:
-        mask |= MOD_ALT
-    if modifiers & Qt.KeyboardModifier.ShiftModifier:
-        mask |= MOD_SHIFT
-    if modifiers & Qt.KeyboardModifier.MetaModifier:
-        mask |= MOD_WIN
-    return mask
+                                                   
 
 
-def _vk_is_down(vk):
-    if sys.platform != "win32":
-        return False
-    try:
-        return bool(ctypes.windll.user32.GetAsyncKeyState(int(vk)) & 0x8000)
-    except Exception:
-        return False
+                                             
 
 
-def _current_modifier_mask():
-    mask = 0
-    if _vk_is_down(0x11) or _vk_is_down(0xA2) or _vk_is_down(0xA3):
-        mask |= MOD_CTRL
-    if _vk_is_down(0x12) or _vk_is_down(0xA4) or _vk_is_down(0xA5):
-        mask |= MOD_ALT
-    if _vk_is_down(0x10) or _vk_is_down(0xA0) or _vk_is_down(0xA1):
-        mask |= MOD_SHIFT
-    if _vk_is_down(0x5B) or _vk_is_down(0x5C):
-        mask |= MOD_WIN
-    return mask
+                                                        
 
 
-def hotkey_text(spec):
-    if not isinstance(spec, dict):
-        return "Set hotkey"
-    try:
-        vk = int(spec.get("virtual_key", 0) or 0)
-        modifiers = int(spec.get("modifiers", 0) or 0)
-    except (TypeError, ValueError):
-        return "Set hotkey"
-    labels = []
-    for bit, label in ((MOD_CTRL, "Ctrl"), (MOD_ALT, "Alt"), (MOD_SHIFT, "Shift"), (MOD_WIN, "Win")):
-        if modifiers & bit:
-            labels.append(label)
-    names = {
-        0x08: "Backspace", 0x09: "Tab", 0x0D: "Enter", 0x10: "Shift", 0x11: "Ctrl",
-        0x12: "Alt", 0x13: "Pause", 0x14: "Caps Lock", 0x1B: "Esc", 0x20: "Space",
-        0x21: "Page Up", 0x22: "Page Down", 0x23: "End", 0x24: "Home",
-        0x25: "Left", 0x26: "Up", 0x27: "Right", 0x28: "Down", 0x2C: "Print Screen",
-        0x2D: "Insert", 0x2E: "Delete", 0x5B: "Left Win", 0x5C: "Right Win",
-        0x60: "Num 0", 0x61: "Num 1", 0x62: "Num 2", 0x63: "Num 3", 0x64: "Num 4",
-        0x65: "Num 5", 0x66: "Num 6", 0x67: "Num 7", 0x68: "Num 8", 0x69: "Num 9",
-        0x6A: "Num *", 0x6B: "Num +", 0x6D: "Num -", 0x6E: "Num .", 0x6F: "Num /",
-        0x90: "Num Lock", 0x91: "Scroll Lock",
-        0xA0: "Left Shift", 0xA1: "Right Shift", 0xA2: "Left Ctrl", 0xA3: "Right Ctrl",
-        0xA4: "Left Alt", 0xA5: "Right Alt",
-        0xBA: ";", 0xBB: "=", 0xBC: ",", 0xBD: "-", 0xBE: ".", 0xBF: "/",
-        0xC0: "`", 0xDB: "[", 0xDC: "\\", 0xDD: "]", 0xDE: "'",
-    }
-    if 0x41 <= vk <= 0x5A or 0x30 <= vk <= 0x39:
-        key_name = chr(vk)
-    elif 0x70 <= vk <= 0x87:
-        key_name = f"F{vk - 0x6F}"
-    else:
-        key_name = names.get(vk, f"VK {vk:02X}")
-    own_modifier = _modifier_bit_for_vk(vk)
-    if own_modifier and modifiers & own_modifier:
-        labels = [label for bit, label in ((MOD_CTRL, "Ctrl"), (MOD_ALT, "Alt"), (MOD_SHIFT, "Shift"), (MOD_WIN, "Win")) if modifiers & bit and bit != own_modifier]
-    labels.append(key_name)
-    return "+".join(labels)
+                                             
 
 
-class FastFlagHotkeyService(QObject):
-    activated = pyqtSignal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._bindings = {}
-        self._down = {}
-        self._timer = QTimer(self)
-        self._timer.setInterval(15)
-        self._timer.timeout.connect(self._poll)
-        if sys.platform == "win32":
-            self._timer.start()
-
-    def set_bindings(self, bindings):
-        clean = {}
-        if isinstance(bindings, dict):
-            for name, spec in bindings.items():
-                if not isinstance(name, str) or not isinstance(spec, dict):
-                    continue
-                try:
-                    vk = int(spec.get("virtual_key", 0) or 0)
-                    modifiers = int(spec.get("modifiers", 0) or 0) & 0x0F
-                except (TypeError, ValueError):
-                    continue
-                if 0 < vk <= 0xFF:
-                    clean[name] = {**spec, "virtual_key": vk, "modifiers": modifiers}
-        self._bindings = clean
-        current_modifiers = _current_modifier_mask()
-        down = {}
-        for name, spec in clean.items():
-            vk = int(spec.get("virtual_key", 0) or 0)
-            required = int(spec.get("modifiers", 0) or 0) & 0x0F
-            own_modifier = _modifier_bit_for_vk(vk)
-            comparison = current_modifiers & ~own_modifier
-            required_comparison = required & ~own_modifier
-            down[name] = bool(_vk_is_down(vk) and comparison == required_comparison)
-        self._down = down
-
-    def _poll(self):
-        if not self._bindings or sys.platform != "win32":
-            return
-        current_modifiers = _current_modifier_mask()
-        for name, spec in tuple(self._bindings.items()):
-            vk = int(spec.get("virtual_key", 0) or 0)
-            required = int(spec.get("modifiers", 0) or 0) & 0x0F
-            own_modifier = _modifier_bit_for_vk(vk)
-            comparison = current_modifiers & ~own_modifier
-            required_comparison = required & ~own_modifier
-            active = _vk_is_down(vk) and comparison == required_comparison
-            was_down = self._down.get(name, False)
-            if active and not was_down:
-                self.activated.emit(name)
-            self._down[name] = active
+                                                                  
+import lelsploit_fastflags as _lelsploit_fastflags
+_lelsploit_fastflags.configure_host(globals())
+_modifier_bit_for_vk = _lelsploit_fastflags._modifier_bit_for_vk
+_qt_modifier_mask = _lelsploit_fastflags._qt_modifier_mask
+_vk_is_down = _lelsploit_fastflags._vk_is_down
+_current_modifier_mask = _lelsploit_fastflags._current_modifier_mask
+hotkey_text = _lelsploit_fastflags.hotkey_text
+FastFlagHotkeyService = _lelsploit_fastflags.FastFlagHotkeyService
+FastFlagHotkeyCaptureDialog = _lelsploit_fastflags.FastFlagHotkeyCaptureDialog
+FastFlagListDialog = _lelsploit_fastflags.FastFlagListDialog
 
 
-class FastFlagHotkeyCaptureDialog(QDialog):
-    _MODIFIER_QT_KEYS = {
-        int(Qt.Key.Key_Control), int(Qt.Key.Key_Alt), int(Qt.Key.Key_Shift), int(Qt.Key.Key_Meta),
-    }
-
-    def __init__(self, flag_name, parent=None):
-        super().__init__(parent)
-        self.binding = None
-        self.clear_requested = False
-        self._pending_binding = None
-        self._pending_key = None
-        self.setWindowTitle("Set FastFlag Hotkey")
-        self.setMinimumSize(430, 170)
-        apply_window_icon(self)
-        root = blur_content_layout(self, self, "Set FastFlag Hotkey", (16, 12, 16, 16), 10)
-        label = QLabel(f'Press a global hotkey for <b>{flag_name}</b>.<br><span style="color:#888">Esc, Backspace, or Delete clears it.</span>')
-        label.setTextFormat(Qt.TextFormat.RichText)
-        label.setWordWrap(True)
-        root.addWidget(label)
-        self.preview = QLabel("Waiting for a key combination…")
-        self.preview.setStyleSheet("color:#a9a9a9;background:transparent;padding:10px 0;font-size:12px;")
-        root.addWidget(self.preview)
-        row = QHBoxLayout()
-        clear = QPushButton("Clear hotkey")
-        cancel = QPushButton("Cancel")
-        clear.clicked.connect(self._clear)
-        cancel.clicked.connect(self.reject)
-        row.addWidget(clear)
-        row.addStretch(1)
-        row.addWidget(cancel)
-        root.addLayout(row)
-        apply_blur_style(self)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        QTimer.singleShot(0, self.setFocus)
-
-    def _clear(self):
-        self.clear_requested = True
-        self.accept()
-
-    def _event_binding(self, event):
-        if sys.platform != "win32":
-            return None
-        try:
-            vk = int(event.nativeVirtualKey())
-            scan = int(event.nativeScanCode())
-        except Exception:
-            return None
-        if not 0 < vk <= 0xFF:
-            return None
-        modifiers = _qt_modifier_mask(event.modifiers())
-        modifiers &= ~_modifier_bit_for_vk(vk)
-        return {
-            "virtual_key": vk,
-            "scan_code": max(0, scan),
-            "extended": vk in {0xA3, 0xA5, 0x2D, 0x2E, 0x24, 0x23, 0x21, 0x22, 0x25, 0x26, 0x27, 0x28, 0x5B, 0x5C},
-            "modifiers": modifiers,
-        }
-
-    def keyPressEvent(self, event):
-        if event.isAutoRepeat():
-            event.accept()
-            return
-        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
-            self.clear_requested = True
-            self.binding = None
-            self.accept()
-            return
-        binding = self._event_binding(event)
-        if binding is None:
-            self.preview.setText("That key could not be captured.")
-            event.accept()
-            return
-        self._pending_binding = binding
-        self._pending_key = int(event.key())
-        if self._pending_key in self._MODIFIER_QT_KEYS:
-            preview = dict(binding)
-            preview["modifiers"] = _qt_modifier_mask(event.modifiers()) | _modifier_bit_for_vk(binding["virtual_key"])
-            self.preview.setText(hotkey_text(preview))
-        else:
-            self.preview.setText(hotkey_text(binding))
-        event.accept()
-
-    def keyReleaseEvent(self, event):
-        if event.isAutoRepeat():
-            event.accept()
-            return
-        if self._pending_binding is not None and int(event.key()) == self._pending_key:
-            self.binding = dict(self._pending_binding)
-            self._pending_binding = None
-            self._pending_key = None
-            self.accept()
-            return
-        event.accept()
+                                                             
 
 
 
 
-class FastFlagListDialog(QDialog):
-    MAX_ROWS = 1000
-
-    def __init__(self, fastflags_window):
-        super().__init__(fastflags_window)
-        self.fastflags_window = fastflags_window
-        self.setObjectName("fastFlagListDialog")
-        self.catalog = useful_fastflag_catalog()
-        self.setWindowTitle("FastFlags List")
-        self.resize(860, 600)
-        self.setMinimumSize(700, 460)
-        apply_window_icon(self)
-        root = blur_content_layout(self, self, "FastFlags List", (14, 12, 14, 14), 9)
-
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search for useful FastFlags")
-        root.addWidget(self.search)
-
-        self.table = QTableWidget(0, 3)
-        self.table.setObjectName("catalogTable")
-        self.table.setAutoFillBackground(False)
-        self.table.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.table.viewport().setAutoFillBackground(False)
-        self.table.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.table.viewport().setStyleSheet("background:transparent;border:0;")
-        self.table.setHorizontalHeaderLabels(("Name", "Value", "Does"))
-        self.table.verticalHeader().setVisible(False)
-        self.table.setShowGrid(False)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(False)
-        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self.table.setColumnWidth(1, 145)
-        self.table.verticalHeader().setDefaultSectionSize(31)
-        root.addWidget(self.table, 1)
-
-        actions = QHBoxLayout()
-        self.add_selected = QPushButton("Add selected")
-        self.add_selected.setEnabled(False)
-        actions.addStretch(1)
-        actions.addWidget(self.add_selected)
-        root.addLayout(actions)
-
-        self.search.textChanged.connect(self._populate)
-        self.table.itemSelectionChanged.connect(
-            lambda: self.add_selected.setEnabled(bool(self.table.selectionModel().selectedRows()))
-        )
-        self.table.itemDoubleClicked.connect(lambda _item: self._add_selection())
-        self.add_selected.clicked.connect(self._add_selection)
-
-        self.setStyleSheet(r'''
-            QDialog#fastFlagListDialog { background:#0b0c0d; color:#dedede; }
-            QWidget { color:#dedede; }
-            QLabel { background:transparent; }
-            QLineEdit { background:#0d0d0e; color:#ededed; border:1px solid #2a2a2d; border-radius:6px; min-height:32px; padding:0 9px; }
-            QLineEdit:focus { background:#101012; border-color:#45454a; }
-            QPushButton { background:#111113; color:#e9e9e9; border:1px solid #2a2a2d; border-radius:6px; padding:6px 11px; }
-            QPushButton:hover { background:#19191c; border-color:#414146; }
-            QTableWidget#catalogTable { background:transparent; alternate-background-color:transparent; border:1px solid #252528; border-radius:7px; selection-background-color:#1a1b1d; selection-color:#fff; gridline-color:transparent; }
-            QTableWidget#catalogTable::item { padding:5px 7px; border-bottom:1px solid #151517; }
-            QHeaderView::section { background:#0d0d0f; color:#bcbcbc; border:0; border-bottom:1px solid #252528; padding:7px; font-weight:600; }
-        ''')
-        apply_blur_style(self)
-        self._populate()
-
-    def _matching_entries(self):
-        query = self.search.text().strip().casefold()
-        rows = []
-        for name, meta in self.catalog.items():
-            
-            haystack = " ".join((
-                name,
-                str(meta.get("category", "")),
-                " ".join(meta.get("presets", ())),
-            )).casefold()
-            if query and query not in haystack:
-                continue
-            rows.append((name, meta))
-        rows.sort(key=lambda item: item[0].casefold())
-        return rows
-
-    def _populate(self, *_):
-        rows = self._matching_entries()
-        visible = rows[:self.MAX_ROWS]
-        self.table.setUpdatesEnabled(False)
-        self.table.setRowCount(len(visible))
-        try:
-            for row, (name, meta) in enumerate(visible):
-                presets = ", ".join(meta.get("presets", ()))
-                values = (
-                    name,
-                    str(meta.get("value", "")),
-                    presets,
-                )
-                for column, value in enumerate(values):
-                    item = QTableWidgetItem(value)
-                    item.setData(Qt.ItemDataRole.UserRole, name)
-                    if presets:
-                        item.setToolTip(presets)
-                    self.table.setItem(row, column, item)
-        finally:
-            self.table.setUpdatesEnabled(True)
-        self.add_selected.setEnabled(bool(self.table.selectionModel().selectedRows()))
-
-    def _add_selection(self):
-        selected = []
-        for index in self.table.selectionModel().selectedRows():
-            item = self.table.item(index.row(), 0)
-            if not item:
-                continue
-            name = str(item.data(Qt.ItemDataRole.UserRole) or item.text()).strip()
-            if name:
-                selected.append(name)
-        if not selected:
-            return
-        additions = {}
-        for name in selected:
-            meta = self.catalog.get(name, {})
-            additions[name] = str(meta.get("value", ""))
-        self.fastflags_window.add_catalog_fastflags(additions)
-        self.accept()
+                                                    
 
 
 class LuauLexer(QsciLexerLua):
@@ -5313,1216 +4750,42 @@ class CodeEditor(QsciScintilla):
         menu.exec(event.globalPos())
 
 
-class ScriptBloxInstallDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.behavior = None
-        self.setWindowTitle("ScriptBlox install")
-        self.setModal(True)
-        self.resize(470, 315)
-        self.setMinimumWidth(430)
-        apply_window_icon(self)
-
-        layout = blur_content_layout(self, self, "ScriptBlox install", (18, 18, 18, 18), 12)
-
-        heading = QLabel("Choose how ScriptBlox should install scripts")
-        heading.setObjectName("installHeading")
-        layout.addWidget(heading)
-
-        choices = QVBoxLayout()
-        choices.setSpacing(8)
-        options = (
-            ("Put in current code window", "current", False),
-            ("Put in current code window & run", "current_execute", False),
-            ("Put in new code window", "new", False),
-            ("Put in new code window & run    Recommended", "new_execute", True),
-        )
-        for label, behavior, recommended in options:
-            button = QPushButton(label.replace("&", "&&"))
-            button.setObjectName("installRecommended" if recommended else "installChoice")
-            button.setMinimumHeight(42)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
-            button.clicked.connect(lambda checked=False, value=behavior: self.choose(value))
-            choices.addWidget(button)
-        layout.addLayout(choices)
-
-        bottom = QHBoxLayout()
-        bottom.addStretch(1)
-        cancel = QPushButton("Cancel")
-        cancel.setObjectName("installCancel")
-        cancel.setFixedWidth(90)
-        cancel.clicked.connect(self.reject)
-        bottom.addWidget(cancel)
-        layout.addLayout(bottom)
-
-        self.setStyleSheet(r'''            QLabel#installHeading {
-                color: #f1f1f1;
-                font-size: 14px;
-                font-weight: 600;
-            }
-            QPushButton#installChoice, QPushButton#installRecommended {
-                text-align: left;
-                padding: 9px 12px;
-                border-radius: 8px;
-            }
-            QPushButton#installChoice {
-                background: #0b0c0b;
-                border: 1px solid #292929;
-                color: #e4e4e4;
-            }
-            QPushButton#installChoice:hover {
-                background: #181818;
-                border-color: #3c3c3c;
-            }
-            QPushButton#installRecommended {
-                background: #102b19;
-                border: 1px solid #2e6c3d;
-                color: #8febaa;
-                font-weight: 600;
-            }
-            QPushButton#installRecommended:hover {
-                background: #163922;
-                border-color: #438a55;
-                color: #a4f4b9;
-            }
-            QPushButton#installCancel {
-                background: transparent;
-                border: 1px solid #292929;
-            }
-            QPushButton#installCancel:hover {
-                background: #151515;
-                border-color: #3a3a3a;
-            }
-        ''')
-        apply_blur_style(self)
-
-    def choose(self, behavior):
-        self.behavior = behavior
-        self.accept()
-
-
-class ScriptBloxWindow(QDialog):
-    SORTS = (
-        ("Popular", "views"),
-        ("Most liked", "likeCount"),
-        ("Newest", "createdAt"),
-        ("Recently updated", "updatedAt"),
-    )
-
-    def __init__(self, parent, install_callback):
-        super().__init__(parent)
-        self.install_callback = install_callback
-        self.events = queue.Queue()
-        self.request_id = 0
-        self.next_page = None
-        self.loaded_keys = set()
-        self.saved_scripts = load_saved_scripts()
-        self.saved_only = False
-        self.browse_state = None
-        self.auto_place_id = None
-        self.setWindowTitle("ScriptBlox")
-        self.resize(720, 560)
-        self.setMinimumSize(560, 400)
-        apply_window_icon(self)
-
-        layout = blur_content_layout(self, self, "ScriptBlox", (16, 16, 16, 16), 10)
-        back_row = QHBoxLayout()
-        self.back_button = QPushButton()
-        self.back_button.setFixedSize(34, 34)
-        back_icon = app_icon("back")
-        if not back_icon.isNull():
-            self.back_button.setIcon(back_icon)
-            self.back_button.setIconSize(QSize(18, 18))
-        self.back_button.clicked.connect(lambda: self.saved_button.setChecked(False))
-        self.back_button.hide()
-        back_row.addWidget(self.back_button)
-        back_row.addStretch(1)
-        layout.addLayout(back_row)
-        searches = QHBoxLayout()
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Search scripts...")
-        self.search.setClearButtonEnabled(True)
-        self.search.returnPressed.connect(self.refresh)
-        searches.addWidget(self.search, 1)
-
-        self.game_search = QLineEdit()
-        self.game_search.setPlaceholderText("Search games or place ID...")
-        self.game_search.setClearButtonEnabled(True)
-        self.game_search.returnPressed.connect(self.refresh)
-        searches.addWidget(self.game_search, 1)
-        layout.addLayout(searches)
-
-        filters = QHBoxLayout()
-
-        self.sort = LelComboBox()
-        sort_icon = app_icon("sort")
-        for label, value in self.SORTS:
-            self.sort.addItem(sort_icon, label, value)
-        self.sort.currentIndexChanged.connect(self.refresh)
-        filters.addWidget(self.sort)
-
-        self.keyless = QPushButton("Keyless")
-        self.keyless.setObjectName("keylessButton")
-        self.keyless.setCheckable(True)
-        self.keyless.setChecked(True)
-        keyless_icon = app_icon("keyless")
-        if not keyless_icon.isNull():
-            self.keyless.setIcon(keyless_icon)
-            self.keyless.setIconSize(QSize(18, 18))
-        self.keyless.toggled.connect(self.refresh)
-        filters.addWidget(self.keyless)
-        filters.addStretch(1)
-
-        self.saved_button = QPushButton("Saved Scripts")
-        self.saved_button.setObjectName("savedScriptsButton")
-        self.saved_button.setCheckable(True)
-        saved_icon = app_icon("stared")
-        if saved_icon.isNull():
-            saved_icon = app_icon("star")
-        if not saved_icon.isNull():
-            self.saved_button.setIcon(saved_icon)
-            self.saved_button.setIconSize(QSize(17, 17))
-        self.saved_button.toggled.connect(self.set_saved_only)
-        filters.addWidget(self.saved_button)
-        layout.addLayout(filters)
-
-        self.status = QLabel("Loading scripts...")
-        self.status.setTextFormat(Qt.TextFormat.PlainText)
-        layout.addWidget(self.status)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.results = QWidget()
-        self.results_layout = QVBoxLayout(self.results)
-        self.results_layout.setContentsMargins(0, 0, 0, 0)
-        self.results_layout.setSpacing(8)
-        self.load_more_button = QPushButton("Load More")
-        self.load_more_button.clicked.connect(self.load_more)
-        self.load_more_button.hide()
-        self.results_layout.addStretch(1)
-        self.results_layout.addWidget(self.load_more_button)
-        self.scroll.setWidget(self.results)
-        layout.addWidget(self.scroll, 1)
-
-        self.search_timer = QTimer(self)
-        self.search_timer.setSingleShot(True)
-        self.search_timer.setInterval(650)
-        self.search_timer.timeout.connect(self.refresh)
-        self.search.textChanged.connect(lambda: self.search_timer.start())
-        self.game_search.textChanged.connect(lambda: self.search_timer.start())
-        self.poll_timer = QTimer(self)
-        self.poll_timer.setInterval(50)
-        self.poll_timer.timeout.connect(self.poll_events)
-        self.poll_timer.start()
-        self.setStyleSheet("""
-            QDialog { background: #08090a; color: #e8e9ea; }
-            QWidget { background: transparent; color: #e8e9ea; }
-            QLabel, QCheckBox { background: transparent; }
-            QLabel { color: #b7bbbd; }
-            QLineEdit { background: #0d0d0d; border: 1px solid #2b2b2b;
-                border-radius: 7px; padding: 7px; }
-            QPushButton { background: #101214; border: 1px solid #2d3235;
-                border-radius: 4px; padding: 5px 10px; }
-            QPushButton:hover { background: #1e2225; }
-            QPushButton#starButton { background: #0d0d0d; border: 1px solid #262626;
-                border-radius: 6px; padding: 0; }
-            QPushButton#starButton:hover { background: #181818; border-color: #3a3a3a; }
-            QPushButton#savedScriptsButton:checked { background: #27220f; color: #f0d56a;
-                border-color: #66582a; }
-            QPushButton#savedScriptsButton:checked:hover { background: #322b12; border-color: #806f32; }
-            QFrame#scriptCard { background: #090909; border: 1px solid #121212;
-                border-radius: 4px; }
-            QScrollArea { background: transparent; border: none; }
-            QScrollArea > QWidget > QWidget { background: transparent; }
-        """)
-        apply_blur_style(self)
-        self.prefill_current_game(refresh_on_change=False)
-        QTimer.singleShot(0, self.refresh)
-
-    def prefill_current_game(self, refresh_on_change=True):
-        if self.saved_only:
-            return False
-        current = self.game_search.text().strip()
-        if current and current != (self.auto_place_id or ""):
-            return False
-        try:
-            place_id = current_roblox_place_id()
-        except Exception:
-            return False
-        if not place_id:
-            return False
-        place_id = str(place_id)
-        changed = current != place_id
-        self.auto_place_id = place_id
-        if changed:
-            self.game_search.blockSignals(True)
-            self.game_search.setText(place_id)
-            self.game_search.blockSignals(False)
-            if refresh_on_change:
-                QTimer.singleShot(0, self.refresh)
-        return changed
-
-    def refresh(self, *_):
-        self.search_timer.stop()
-        self.next_page = None
-        self.loaded_keys.clear()
-        self.clear_results()
-        if self.saved_only:
-            self.refresh_saved()
-            return
-        self.request_page(1, append=False)
-
-    def set_saved_only(self, enabled):
-        enabled = bool(enabled)
-        if enabled == self.saved_only:
-            return
-
-        self.search_timer.stop()
-        if enabled:
-            self.browse_state = {
-                "search": self.search.text(),
-                "game_search": self.game_search.text(),
-                "keyless": self.keyless.isChecked(),
-                "sort": self.sort.currentIndex(),
-            }
-            for widget in (self.search, self.game_search, self.keyless, self.sort):
-                widget.blockSignals(True)
-            self.search.clear()
-            self.game_search.clear()
-            self.keyless.setChecked(False)
-            for widget in (self.search, self.game_search, self.keyless, self.sort):
-                widget.blockSignals(False)
-                widget.hide()
-        else:
-            state = self.browse_state or {}
-            for widget in (self.search, self.game_search, self.keyless, self.sort):
-                widget.show()
-                widget.blockSignals(True)
-            self.search.setText(str(state.get("search", "")))
-            self.game_search.setText(str(state.get("game_search", "")))
-            self.keyless.setChecked(bool(state.get("keyless", True)))
-            sort_index = state.get("sort", 0)
-            if isinstance(sort_index, int) and 0 <= sort_index < self.sort.count():
-                self.sort.setCurrentIndex(sort_index)
-            for widget in (self.search, self.game_search, self.keyless, self.sort):
-                widget.blockSignals(False)
-            self.browse_state = None
-
-        self.saved_only = enabled
-        self.back_button.setVisible(enabled)
-        self.request_id += 1
-        self.next_page = None
-        self.load_more_button.hide()
-        self.load_more_button.setEnabled(False)
-        self.refresh()
-
-    def refresh_saved(self):
-        scripts = list(self.saved_scripts.values())
-        scripts.sort(
-            key=lambda item: float(item.get("_lelsploit_saved_at", 0) or 0),
-            reverse=True,
-        )
-        self.show_scripts(scripts, append=False)
-        if not scripts:
-            self.status.setText("No saved scripts.")
-
-    def request_page(self, page, append):
-        self.request_id += 1
-        request_id = self.request_id
-        self.status.setText("Loading more..." if append else "Loading scripts...")
-        self.set_filters_enabled(False)
-        self.load_more_button.setVisible(False)
-        self.load_more_button.setEnabled(False)
-        threading.Thread(
-            target=fetch_scriptblox,
-            args=(self.events, request_id, self.search.text(),
-                  self.game_search.text(), self.sort.currentData(),
-                  self.keyless.isChecked(), page, append),
-            daemon=True,
-        ).start()
-
-    def load_more(self):
-        if self.next_page is not None and self.load_more_button.isEnabled():
-            self.request_page(self.next_page, append=True)
-
-    def set_filters_enabled(self, enabled):
-        active = bool(enabled) and not self.saved_only
-        self.sort.setEnabled(active)
-        self.keyless.setEnabled(active)
-
-    def clear_results(self):
-        while self.results_layout.count() > 2:
-            item = self.results_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        self.load_more_button.hide()
-
-    def show_scripts(self, scripts, append=False):
-        if not append:
-            self.clear_results()
-            self.loaded_keys.clear()
-        if not scripts and not self.loaded_keys:
-            self.status.setText("No saved scripts." if self.saved_only else "No scripts found.")
-            return
-        install_icon = app_icon("install")
-        for script in scripts:
-            game_data = script.get("game") if isinstance(script.get("game"), dict) else {}
-            key = scriptblox_script_key(script)
-            if key in self.loaded_keys:
-                continue
-            self.loaded_keys.add(key)
-            card = QFrame()
-            card.setObjectName("scriptCard")
-            card_layout = QHBoxLayout(card)
-            card_layout.setContentsMargins(12, 10, 12, 10)
-            details = QVBoxLayout()
-            title = QLabel(str(script.get("title") or "Untitled script"))
-            title.setTextFormat(Qt.TextFormat.PlainText)
-            title.setStyleSheet("color: #eeeeee; font-weight: 600;")
-            details.addWidget(title)
-            game = str(game_data.get("name") or "Universal")
-            views = script.get("views")
-            meta = game if not isinstance(views, (int, float)) else f"{game}  •  {int(views):,} views"
-            meta_label = QLabel(meta)
-            meta_label.setTextFormat(Qt.TextFormat.PlainText)
-            details.addWidget(meta_label)
-            card_layout.addLayout(details, 1)
-            install = QPushButton("Install")
-            if not install_icon.isNull():
-                install.setIcon(install_icon)
-                install.setIconSize(QSize(18, 18))
-            install.clicked.connect(lambda checked=False, item=script: self.install(item))
-            card_layout.addWidget(install)
-
-            star = QPushButton()
-            star.setObjectName("starButton")
-            star.setFixedSize(34, 34)
-            self.update_star_button(star, key in self.saved_scripts)
-            star.clicked.connect(
-                lambda checked=False, item=script, button=star: self.toggle_saved(item, button)
-            )
-            card_layout.addWidget(star)
-            self.results_layout.insertWidget(self.results_layout.count() - 2, card)
-        label = "saved scripts" if self.saved_only else "scripts"
-        self.status.setText(f"{len(self.loaded_keys)} {label}")
-
-    def update_star_button(self, button, starred):
-        icon = app_icon("stared" if starred else "star")
-        if not icon.isNull():
-            button.setIcon(icon)
-            button.setIconSize(QSize(17, 17))
-        button.setToolTip("Remove from saved scripts" if starred else "Save script")
-
-    def toggle_saved(self, script, button=None):
-        key = scriptblox_script_key(script)
-        if not key:
-            return
-        if key in self.saved_scripts:
-            del self.saved_scripts[key]
-            starred = False
-        else:
-            try:
-                saved = json.loads(json.dumps(script, ensure_ascii=False))
-            except (TypeError, ValueError):
-                saved = dict(script)
-            saved["_lelsploit_saved_at"] = time.time()
-            self.saved_scripts[key] = saved
-            starred = True
-        try:
-            save_saved_scripts(self.saved_scripts)
-        except OSError as exc:
-            self.status.setText(f"Could not save scripts: {exc}")
-            return
-        if button is not None:
-            self.update_star_button(button, starred)
-        if starred:
-            saved_item = self.saved_scripts.get(key, {})
-            script_id = saved_item.get("_id") or saved_item.get("slug")
-            code = saved_item.get("script")
-            if script_id and not (isinstance(code, str) and code.strip()):
-                self.status.setText("Saving script source...")
-                threading.Thread(
-                    target=fetch_scriptblox_saved_raw,
-                    args=(self.events, key, script_id, saved_item.get("slug")),
-                    daemon=True,
-                ).start()
-            else:
-                self.status.setText("Script saved.")
-        else:
-            self.status.setText("Removed from saved scripts.")
-        if self.saved_only and not starred:
-            self.refresh_saved()
-
-    def install(self, script):
-        title = str(script.get("title") or "script")
-        code = script.get("script")
-        if isinstance(code, str) and code.strip():
-            installed = self.install_callback(code, title)
-            self.status.setText(f"Installed {title}." if installed else "Install cancelled.")
-            return
-        script_id = script.get("_id") or script.get("slug")
-        if not script_id:
-            self.status.setText("This script has no downloadable source.")
-            return
-        self.status.setText(f"Installing {title}...")
-        threading.Thread(
-            target=fetch_scriptblox_raw,
-            args=(self.events, script_id, title, script.get("slug")),
-            daemon=True,
-        ).start()
-
-    def poll_events(self):
-        for _ in range(20):
-            try:
-                kind, first, second = self.events.get_nowait()
-            except queue.Empty:
-                break
-            if kind == "catalog":
-                if first == self.request_id:
-                    self.set_filters_enabled(True)
-                    self.next_page = second["next_page"]
-                    self.show_scripts(second["scripts"], second["append"])
-                    self.load_more_button.setVisible(self.next_page is not None)
-                    self.load_more_button.setEnabled(self.next_page is not None)
-            elif kind == "catalog_error":
-                if first == self.request_id:
-                    self.set_filters_enabled(True)
-                    self.load_more_button.hide()
-                    self.load_more_button.setEnabled(False)
-                    if not self.loaded_keys:
-                        self.clear_results()
-                    self.status.setText("Could not load scripts.")
-            elif kind == "install":
-                installed = self.install_callback(second, first)
-                self.status.setText(f"Installed {first}." if installed else "Install cancelled.")
-            elif kind == "save":
-                if first in self.saved_scripts:
-                    self.saved_scripts[first]["script"] = second
-                    try:
-                        save_saved_scripts(self.saved_scripts)
-                        self.status.setText("Script saved.")
-                    except OSError as exc:
-                        self.status.setText(f"Could not save scripts: {exc}")
-            elif kind == "save_error":
-                if first in self.saved_scripts:
-                    self.status.setText(f"Saved script, but source could not be cached: {second}")
-            else:
-                self.status.setText(f"Could not install {first}: {second}")
-
-
-class HoverCopyButton(QPushButton):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._opacity = QGraphicsOpacityEffect(self)
-        self._opacity.setOpacity(0.72)
-        self.setGraphicsEffect(self._opacity)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.setFixedSize(26, 26)
-        self.setIcon(app_icon("copy"))
-        self.setIconSize(QSize(14, 14))
-        self.setStyleSheet("""
-            QPushButton {
-                background: transparent;
-                border: 0;
-                border-radius: 5px;
-                padding: 0;
-            }
-            QPushButton:hover { background: #1b1b1b; }
-            QPushButton:pressed { background: #121212; }
-        """)
-
-    def enterEvent(self, event):
-        self._opacity.setOpacity(1.0)
-        self.setIconSize(QSize(16, 16))
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._opacity.setOpacity(0.72)
-        self.setIconSize(QSize(14, 14))
-        super().leaveEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._opacity.setOpacity(0.55)
-            self.setIconSize(QSize(12, 12))
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        super().mouseReleaseEvent(event)
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._opacity.setOpacity(1.0 if self.underMouse() else 0.72)
-            self.setIconSize(QSize(13, 13))
-            QTimer.singleShot(
-                85,
-                lambda: self.setIconSize(QSize(16, 16) if self.underMouse() else QSize(14, 14)),
-            )
-
-
-class HoverCopyLineEdit(QLineEdit):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._copy_button = HoverCopyButton(self)
-        self._copy_button.hide()
-        self._copy_button.clicked.connect(self.copy_result)
-        self.textChanged.connect(self._sync_copy_button)
-        self.setMouseTracking(True)
-        self.setTextMargins(0, 0, 30, 0)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        x = max(2, self.width() - self._copy_button.width() - 5)
-        y = max(0, (self.height() - self._copy_button.height()) // 2)
-        self._copy_button.move(x, y)
-        self._copy_button.raise_()
-
-    def enterEvent(self, event):
-        self._sync_copy_button()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        super().leaveEvent(event)
-        QTimer.singleShot(0, self._sync_copy_button)
-
-    def _sync_copy_button(self, *_):
-        visible = bool(self.text()) and (self.underMouse() or self._copy_button.underMouse())
-        self._copy_button.setVisible(visible)
-        if visible:
-            self._copy_button.raise_()
-
-    def copy_result(self):
-        value = self.text()
-        if value:
-            QApplication.clipboard().setText(value)
-
-
-class ToolsWindow(QDialog):
-    TOOL_NAMES = ("Loadstring Reverser", "Loadstring Creator", "GitHub Rawifier", "Deobfuscate")
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.setWindowTitle("Tools")
-        self.resize(760, 560)
-        self.setMinimumSize(600, 420)
-        apply_window_icon(self)
-
-        self.owner = parent
-        self.events = queue.Queue(maxsize=16)
-        self.fetch_cancel = None
-        self.request_id = 0
-        self.fetch_url = ""
-
-        layout = blur_content_layout(self, self, "Tools", (16, 16, 16, 16), 10)
-
-        nav = QHBoxLayout()
-        nav.setContentsMargins(0, 0, 0, 0)
-        nav.setSpacing(6)
-        self.tool_group = QButtonGroup(self)
-        self.tool_group.setExclusive(True)
-        self.tool_buttons = []
-        for index, name in enumerate(self.TOOL_NAMES):
-            button = QPushButton(name)
-            button.setObjectName("toolNavButton")
-            button.setCheckable(True)
-            button.clicked.connect(lambda checked=False, i=index: self.select_tool(i))
-            self.tool_group.addButton(button, index)
-            self.tool_buttons.append(button)
-            nav.addWidget(button)
-        nav.addStretch(1)
-        layout.addLayout(nav)
-
-        self.tool_stack = QStackedWidget()
-        self.tool_stack.setObjectName("toolStack")
-        layout.addWidget(self.tool_stack, 1)
-
-        self._build_reverser_page()
-        self._build_creator_page()
-        self._build_github_page()
-        self._build_deobfuscate_page()
-        self.select_tool(0)
-
-        self.poll_timer = QTimer(self)
-        self.poll_timer.setInterval(30)
-        self.poll_timer.timeout.connect(self.poll_fetch)
-        self.poll_timer.start()
-
-        self.deob_timer = QTimer(self)
-        self.deob_timer.setInterval(40)
-        self.deob_timer.timeout.connect(self.poll_deobfuscate)
-        self.deob_timer.start()
-
-        self.setStyleSheet(r"""
-            QDialog { background: #08090a; color: #e8e9ea; }
-            QWidget { background: transparent; color: #e8e9ea; }
-            QLabel { background: transparent; color: #a8a8a8; }
-            QStackedWidget#toolStack { background: transparent; border: none; }
-            QPushButton#toolNavButton {
-                min-height: 30px; padding: 0 12px;
-                background: #0d0d0e; color: #bcbcbc;
-                border: 1px solid #242424; border-radius: 5px;
-            }
-            QPushButton#toolNavButton:hover { background: #151516; color: #eeeeee; }
-            QPushButton#toolNavButton:checked {
-                background: #1a1a1c; color: #ffffff; border-color: #383838;
-            }
-            QPlainTextEdit, QLineEdit {
-                background: #09090a; color: #eeeeee;
-                border: 1px solid #272727; border-radius: 5px;
-                padding: 7px;
-            }
-            QLineEdit:read-only { color: #bfc0c2; background: #070708; }
-            QFrame#toolOutputFrame {
-                background: #070708; border: 1px solid #252525; border-radius: 6px;
-            }
-            QsciScintilla#toolOutput {
-                background: #070708; color: #eeeeee; border: none;
-            }
-            QPushButton {
-                background: #111112; color: #eeeeee;
-                border: 1px solid #2b2b2b; border-radius: 5px;
-                padding: 7px 11px;
-            }
-            QPushButton:hover { background: #1a1a1b; border-color: #383838; }
-            QPushButton:disabled { color: #666666; }
-            QScrollBar { background: #070708; }
-            QScrollBar:horizontal { height: 9px; }
-            QScrollBar:vertical { width: 9px; }
-            QScrollBar::handle { background: #38383b; border-radius: 4px; min-width: 24px; min-height: 24px; }
-            QScrollBar::handle:hover { background: #4a4a4e; }
-            QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
-        """)
-        apply_blur_style(self)
-
-    @staticmethod
-    def _page_layout(page):
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 2, 0, 0)
-        layout.setSpacing(8)
-        return layout
-
-    def _build_reverser_page(self):
-        page = QWidget()
-        layout = self._page_layout(page)
-
-        self.loadstring_input = QPlainTextEdit()
-        self.loadstring_input.setPlaceholderText(
-            'loadstring(game:HttpGet("https://example.com/script.lua"))()'
-        )
-        self.loadstring_input.setFixedHeight(92)
-        self.loadstring_input.setFont(QFont("Consolas", 10))
-        layout.addWidget(self.loadstring_input)
-        self.loadstring_find = FindOverlay(self.loadstring_input)
-        self.loadstring_find_shortcut = QShortcut(QKeySequence("Ctrl+F"), self.loadstring_input)
-        self.loadstring_find_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self.loadstring_find_shortcut.activated.connect(self.loadstring_find.show_find)
-
-        fetch_actions = QHBoxLayout()
-        fetch_actions.setContentsMargins(0, 0, 0, 0)
-        fetch_actions.setSpacing(7)
-        self.fetch_button = QPushButton("Reverse / Fetch")
-        self.fetch_button.clicked.connect(self.fetch_loadstring)
-        fetch_actions.addWidget(self.fetch_button, 1)
-        self.fetch_to_script_button = QPushButton("Open as New Script")
-        self.fetch_to_script_button.setEnabled(False)
-        new_icon = app_icon("new")
-        if not new_icon.isNull():
-            self.fetch_to_script_button.setIcon(new_icon)
-            self.fetch_to_script_button.setIconSize(QSize(16, 16))
-        self.fetch_to_script_button.clicked.connect(self.open_fetch_as_script)
-        fetch_actions.addWidget(self.fetch_to_script_button)
-        layout.addLayout(fetch_actions)
-
-        self.fetch_status = QLabel("")
-        self.fetch_status.setTextFormat(Qt.TextFormat.PlainText)
-        self.fetch_status.hide()
-        layout.addWidget(self.fetch_status)
-
-        frame = QFrame()
-        frame.setObjectName("toolOutputFrame")
-        frame_layout = QVBoxLayout(frame)
-        frame_layout.setContentsMargins(1, 1, 1, 1)
-        frame_layout.setSpacing(0)
-
-        self.fetch_output = QsciScintilla(frame)
-        self.fetch_output.setObjectName("toolOutput")
-        self.fetch_output.setUtf8(True)
-        self.fetch_output.setFont(QFont("Consolas", 10))
-        self.fetch_output.setColor(QColor("#eeeeee"))
-        self.fetch_output.setPaper(QColor("#070708"))
-        self.fetch_output.setMargins(0)
-        self.fetch_output.setWrapMode(QsciScintilla.WrapMode.WrapNone)
-        self.fetch_output.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.fetch_output.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.fetch_output.setReadOnly(True)
-        self.fetch_output.SendScintilla(self.fetch_output.SCI_SETUNDOCOLLECTION, 0)
-        self.fetch_output.SendScintilla(
-            self.fetch_output.SCI_SETLAYOUTCACHE, self.fetch_output.SC_CACHE_PAGE
-        )
-        self.fetch_output.SendScintilla(self.fetch_output.SCI_SETSCROLLWIDTH, 1)
-        self.fetch_output.SendScintilla(self.fetch_output.SCI_SETSCROLLWIDTHTRACKING, 1)
-        self._configure_fetch_syntax()
-        frame_layout.addWidget(self.fetch_output)
-        layout.addWidget(frame, 1)
-        self.tool_stack.addWidget(page)
-
-    def _configure_fetch_syntax(self, editor=None, lexer_attr="fetch_lexer"):
-        editor = self.fetch_output if editor is None else editor
-        lexer = LuauLexer(editor)
-        setattr(self, lexer_attr, lexer)
-        editor.SendScintilla(editor.SCI_SETLEXER, editor.SCLEX_NULL)
-        editor.SendScintilla(editor.SCI_STYLESETFORE, editor.STYLE_DEFAULT, QColor("#eeeeee"))
-        editor.SendScintilla(editor.SCI_STYLESETBACK, editor.STYLE_DEFAULT, QColor("#070708"))
-        editor.SendScintilla(editor.SCI_STYLESETFONT, editor.STYLE_DEFAULT, b"Consolas")
-        editor.SendScintilla(editor.SCI_STYLESETSIZE, editor.STYLE_DEFAULT, 10)
-        editor.SendScintilla(editor.SCI_STYLECLEARALL)
-        styles = {
-            "#7f936f": (lexer.Comment, lexer.LineComment),
-            "#86a8e7": (lexer.Keyword,),
-            "#a8c77a": (lexer.String, lexer.Character, lexer.LiteralString, lexer.UnclosedString),
-            "#c9a56f": (lexer.Number,),
-            "#d7dadd": (lexer.Operator,),
-            "#7db0d5": (lexer.BasicFunctions, lexer.KeywordSet5, lexer.KeywordSet6, lexer.KeywordSet7),
-            "#7daee0": (lexer.StringTableMathsFunctions, lexer.CoroutinesIOSystemFacilities),
-            "#b5a0d2": (lexer.KeywordSet8,),
-        }
-        for style in range(32):
-            editor.SendScintilla(editor.SCI_STYLESETFORE, style, QColor("#eeeeee"))
-            editor.SendScintilla(editor.SCI_STYLESETBACK, style, QColor("#070708"))
-        for color, style_numbers in styles.items():
-            for style in style_numbers:
-                editor.SendScintilla(editor.SCI_STYLESETFORE, style, QColor(color))
-        editor.SendScintilla(editor.SCI_SETLEXER, editor.SCLEX_LUA)
-        for number in range(1, 9):
-            words = (lexer.keywords(number) or "").encode("utf-8")
-            editor.SendScintilla(editor.SCI_SETKEYWORDS, number - 1, words)
-        editor.SendScintilla(editor.SCI_SETPROPERTY, b"fold", b"0")
-        editor.SendScintilla(editor.SCI_SETIDLESTYLING, editor.SC_IDLESTYLING_ALL)
-
-    def open_fetch_as_script(self):
-        if self.fetch_output.SendScintilla(self.fetch_output.SCI_GETLENGTH) <= 0:
-            return
-        try:
-            source = self.fetch_output.text()
-        except MemoryError:
-            self.show_fetch_status("Not enough memory to copy this response into a script tab.")
-            return
-        if not source:
-            return
-        name = "reversed.luau"
-        if self.fetch_url:
-            try:
-                candidate = Path(urllib.parse.urlsplit(self.fetch_url).path).name.strip()
-            except Exception:
-                candidate = ""
-            if candidate:
-                candidate = re.sub(r'[^A-Za-z0-9._ -]+', '_', candidate).strip(' ._') or "reversed"
-                name = candidate if candidate.casefold().endswith((".lua", ".luau")) else f"{candidate}.luau"
-        try:
-            self.owner.add_editor_tab(name, source, select=True)
-            self.owner.update_editor_action_state()
-            self.owner.raise_()
-            self.owner.activateWindow()
-            self.show_fetch_status("")
-        except Exception as exc:
-            self.show_fetch_status(f"Could not open script: {exc}")
-
-    def _build_creator_page(self):
-        page = QWidget()
-        layout = self._page_layout(page)
-
-        self.creator_input = QLineEdit()
-        self.creator_input.setPlaceholderText("pastebin.com/raw/... or raw.githubusercontent.com/...")
-        self.creator_input.textChanged.connect(self.update_loadstring_creator)
-        layout.addWidget(self.creator_input)
-
-        self.creator_output = HoverCopyLineEdit()
-        self.creator_output.setPlaceholderText('loadstring(game:HttpGet("..."))()')
-        self.creator_output.setReadOnly(True)
-        layout.addWidget(self.creator_output)
-
-        self.creator_status = QLabel("")
-        self.creator_status.setTextFormat(Qt.TextFormat.PlainText)
-        self.creator_status.hide()
-        layout.addWidget(self.creator_status)
-        layout.addStretch(1)
-        self.tool_stack.addWidget(page)
-
-    def _build_github_page(self):
-        page = QWidget()
-        layout = self._page_layout(page)
-
-        self.github_input = QLineEdit()
-        self.github_input.setPlaceholderText(
-            "github.com/owner/repo/blob/branch/path/to/file.lua"
-        )
-        self.github_input.textChanged.connect(self.update_raw_url)
-        layout.addWidget(self.github_input)
-
-        self.github_output = HoverCopyLineEdit()
-        self.github_output.setPlaceholderText("Raw URL")
-        self.github_output.setReadOnly(True)
-        layout.addWidget(self.github_output)
-
-        self.github_status = QLabel("")
-        self.github_status.setTextFormat(Qt.TextFormat.PlainText)
-        self.github_status.hide()
-        layout.addWidget(self.github_status)
-        layout.addStretch(1)
-        self.tool_stack.addWidget(page)
-
-    def _build_deobfuscate_page(self):
-        page = QWidget()
-        layout = self._page_layout(page)
-
-        self.deob_input = QPlainTextEdit()
-        self.deob_input.setPlaceholderText("Paste obfuscated Lua/Luau here.")
-        self.deob_input.setFont(QFont("Consolas", 10))
-        self.deob_input.setFixedHeight(130)
-        layout.addWidget(self.deob_input)
-
-        input_actions = QHBoxLayout()
-        input_actions.setContentsMargins(0, 0, 0, 0)
-        input_actions.setSpacing(7)
-        self.deob_button = QPushButton("Deobfuscate")
-        self.deob_button.clicked.connect(self.start_deobfuscate)
-        input_actions.addWidget(self.deob_button, 1)
-        self.deob_new_tab_button = QPushButton("Open as New Script")
-        self.deob_new_tab_button.setEnabled(False)
-        new_icon = app_icon("new")
-        if not new_icon.isNull():
-            self.deob_new_tab_button.setIcon(new_icon)
-            self.deob_new_tab_button.setIconSize(QSize(16, 16))
-        self.deob_new_tab_button.clicked.connect(self.open_deobfuscated_as_script)
-        input_actions.addWidget(self.deob_new_tab_button)
-        layout.addLayout(input_actions)
-
-        self.deob_status = QLabel("")
-        self.deob_status.setTextFormat(Qt.TextFormat.PlainText)
-        self.deob_status.setWordWrap(True)
-        self.deob_status.hide()
-        layout.addWidget(self.deob_status)
-
-        frame = QFrame()
-        frame.setObjectName("toolOutputFrame")
-        frame_layout = QVBoxLayout(frame)
-        frame_layout.setContentsMargins(1, 1, 1, 1)
-        frame_layout.setSpacing(0)
-
-        self.deob_output = QsciScintilla(frame)
-        self.deob_output.setObjectName("toolOutput")
-        self.deob_output.setUtf8(True)
-        self.deob_output.setFont(QFont("Consolas", 10))
-        self.deob_output.setColor(QColor("#eeeeee"))
-        self.deob_output.setPaper(QColor("#070708"))
-        self.deob_output.setMargins(0)
-        self.deob_output.setWrapMode(QsciScintilla.WrapMode.WrapNone)
-        self.deob_output.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.deob_output.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.deob_output.setReadOnly(True)
-        self.deob_output.SendScintilla(self.deob_output.SCI_SETUNDOCOLLECTION, 0)
-        self.deob_output.SendScintilla(self.deob_output.SCI_SETLAYOUTCACHE, self.deob_output.SC_CACHE_PAGE)
-        self.deob_output.SendScintilla(self.deob_output.SCI_SETSCROLLWIDTH, 1)
-        self.deob_output.SendScintilla(self.deob_output.SCI_SETSCROLLWIDTHTRACKING, 1)
-        self._configure_fetch_syntax(self.deob_output, "deob_lexer")
-        frame_layout.addWidget(self.deob_output)
-        layout.addWidget(frame, 1)
-
-        self.deob_events = queue.Queue(maxsize=8)
-        self.deob_request_id = 0
-        self.deob_running = False
-        self.deob_result_text = ""
-        self.tool_stack.addWidget(page)
-
-    def show_deob_status(self, text):
-        self.deob_status.setText(str(text or ""))
-        self.deob_status.setVisible(bool(text))
-
-    @staticmethod
-    def _supported_deobfuscation_source(source):
-        try:
-            module = __import__("lelsploit_deobfuscate")
-            checker = getattr(module, "is_supported_obfuscated_format", None)
-            if checker is None:
-                checker = getattr(module, "is_supported_obfuscation", None)
-            if checker is None:
-                return False
-            return bool(checker(source))
-        except Exception:
-            return False
-
-    def prefill_deobfuscate(self, source):
-        source = str(source or "")
-        if source and self._supported_deobfuscation_source(source):
-            self.deob_input.setPlainText(source)
-            self.show_deob_status("")
-            return True
-        return False
-
-    def load_current_script_for_deobfuscate(self):
-        editor = getattr(self.owner, "editor", None)
-        if editor is None:
-            self.show_deob_status("No script tab is open.")
-            return False
-        try:
-            source = editor.text()
-        except MemoryError:
-            self.show_deob_status("Not enough memory to copy the current script.")
-            return False
-        if not source.strip():
-            return False
-        if self.prefill_deobfuscate(source):
-            return True
-        self.show_deob_status("")
-        return False
-
-    @staticmethod
-    def _run_deobfuscator(events, request_id, source):
-        try:
-            module = __import__("lelsploit_deobfuscate")
-            if hasattr(module, "deobfuscate"):
-                result, report = module.deobfuscate(source, return_report=True)
-            else:
-                engine = module.Deobfuscator()
-                result, report = engine.deobfuscate(source, return_report=True)
-            if isinstance(result, (bytes, bytearray)):
-                result = bytes(result).decode("latin-1")
-            result = str(result)
-            family = str(getattr(report, "best_family", "Unknown") or "Unknown")
-            passes = list(getattr(report, "passes", ()) or ())
-            warnings = list(getattr(report, "warnings", ()) or ())
-            status = f"LelSploit recognized {family}. Applied {len(passes)} pass{'es' if len(passes) != 1 else ''}."
-            if passes:
-                status += " " + "; ".join(str(item) for item in passes[:5])
-                if len(passes) > 5:
-                    status += f"; +{len(passes) - 5} more"
-            if warnings:
-                status += " Warning: " + str(warnings[0])
-            events.put(("done", request_id, result, status))
-        except Exception as exc:
-            events.put(("error", request_id, "", f"Deobfuscation failed: {exc}"))
-
-    def start_deobfuscate(self):
-        if self.deob_running:
-            return
-        source = self.deob_input.toPlainText()
-        if not source.strip():
-            self.show_deob_status("Paste an obfuscated script first.")
-            return
-        if not self._supported_deobfuscation_source(source):
-            self.show_deob_status("This is not a supported obfuscated format.")
-            return
-        self.deob_request_id += 1
-        request_id = self.deob_request_id
-        self.deob_running = True
-        self.deob_result_text = ""
-        self.deob_button.setEnabled(False)
-        self.deob_new_tab_button.setEnabled(False)
-        self.show_deob_status("Deobfuscating...")
-        self.deob_output.setReadOnly(False)
-        try:
-            self.deob_output.clear()
-        finally:
-            self.deob_output.setReadOnly(True)
-        threading.Thread(
-            target=self._run_deobfuscator,
-            args=(self.deob_events, request_id, source),
-            daemon=True,
-        ).start()
-
-    def poll_deobfuscate(self):
-        terminal = None
-        for _ in range(4):
-            try:
-                item = self.deob_events.get_nowait()
-            except queue.Empty:
-                break
-            kind, request_id, result, status = item
-            if request_id == self.deob_request_id:
-                terminal = (kind, result, status)
-        if terminal is None:
-            return
-        kind, result, status = terminal
-        self.deob_running = False
-        self.deob_button.setEnabled(True)
-        if kind == "done":
-            self.deob_result_text = result
-            data = result.encode("utf-8", errors="replace")
-            self.deob_output.setReadOnly(False)
-            try:
-                self.deob_output.setText(result)
-                self.deob_output.SendScintilla(self.deob_output.SCI_EMPTYUNDOBUFFER)
-                self.deob_output.SendScintilla(self.deob_output.SCI_COLOURISE, 0, -1)
-            finally:
-                self.deob_output.setReadOnly(True)
-            has_result = bool(data)
-            self.deob_new_tab_button.setEnabled(has_result)
-        else:
-            self.deob_result_text = ""
-            self.deob_new_tab_button.setEnabled(False)
-        self.show_deob_status(status)
-
-    def open_deobfuscated_as_script(self):
-        if not self.deob_result_text:
-            return
-        current_name = "script.luau"
-        try:
-            current_name = self.owner.current_tab_name() or current_name
-        except Exception:
-            pass
-        path = Path(current_name)
-        suffix = path.suffix if path.suffix.casefold() in {".lua", ".luau"} else ".luau"
-        name = f"{path.stem or 'script'}.deobfuscated{suffix}"
-        try:
-            self.owner.add_editor_tab(name, self.deob_result_text, select=True)
-            self.owner.update_editor_action_state()
-            self.owner.raise_()
-            self.owner.activateWindow()
-            self.show_deob_status("")
-        except Exception as exc:
-            self.show_deob_status(f"Could not open the deobfuscated script: {exc}")
-
-    def select_tool(self, index):
-        if index < 0 or index >= self.tool_stack.count():
-            return
-        self.tool_stack.setCurrentIndex(index)
-        for button_index, button in enumerate(self.tool_buttons):
-            button.setChecked(button_index == index)
-        if index == 3:
-            self.load_current_script_for_deobfuscate()
-
-    def prefill_loadstring(self, source):
-        if extract_loadstring_url(source):
-            self.loadstring_input.setPlainText(source)
-            self.select_tool(0)
-
-    def clear_fetch_output(self):
-        self.fetch_output.setReadOnly(False)
-        try:
-            self.fetch_output.clear()
-            self.fetch_output.SendScintilla(self.fetch_output.SCI_EMPTYUNDOBUFFER)
-        finally:
-            self.fetch_output.setReadOnly(True)
-
-    def show_fetch_status(self, text):
-        self.fetch_status.setText(text)
-        self.fetch_status.setVisible(bool(text))
-
-    def show_github_status(self, text):
-        self.github_status.setText(text)
-        self.github_status.setVisible(bool(text))
-
-    def fetch_loadstring(self):
-        source = self.loadstring_input.toPlainText().strip()
-        url = extract_loadstring_url(source)
-        if url is None and source.startswith(("http://", "https://")):
-            url = source
-        if not url:
-            self.show_fetch_status("No HttpGet URL found.")
-            return
-        if self.fetch_cancel is not None:
-            self.fetch_cancel.set()
-        self.request_id += 1
-        request_id = self.request_id
-        self.fetch_cancel = threading.Event()
-        self.fetch_url = url
-        self.clear_fetch_output()
-        self.fetch_to_script_button.setEnabled(False)
-        self.fetch_button.setEnabled(False)
-        self.show_fetch_status("Fetching...")
-        threading.Thread(
-            target=stream_remote_text,
-            args=(self.events, request_id, url, self.fetch_cancel),
-            daemon=True,
-        ).start()
-
-    def append_fetch_bytes(self, data):
-        if not data:
-            return
-        self.fetch_output.setReadOnly(False)
-        try:
-            self.fetch_output.SendScintilla(
-                self.fetch_output.SCI_APPENDTEXT, len(data), data
-            )
-        finally:
-            self.fetch_output.setReadOnly(True)
-
-    def poll_fetch(self):
-        chunks = []
-        terminal = None
-        for _ in range(32):
-            try:
-                kind, request_id, payload = self.events.get_nowait()
-            except queue.Empty:
-                break
-            if request_id != self.request_id:
-                continue
-            if kind == "chunk":
-                chunks.append(payload)
-            else:
-                terminal = (kind, payload)
-                break
-        if chunks:
-            self.append_fetch_bytes(b"".join(chunks))
-        if terminal is None:
-            return
-        kind, payload = terminal
-        self.fetch_button.setEnabled(True)
-        if kind == "done":
-            self.fetch_output.SendScintilla(self.fetch_output.SCI_COLOURISE, 0, -1)
-            self.fetch_to_script_button.setEnabled(
-                self.fetch_output.SendScintilla(self.fetch_output.SCI_GETLENGTH) > 0
-            )
-            self.show_fetch_status("")
-        else:
-            self.fetch_to_script_button.setEnabled(False)
-            self.show_fetch_status(f"Fetch failed: {payload}")
-
-    def show_creator_status(self, text):
-        self.creator_status.setText(text)
-        self.creator_status.setVisible(bool(text))
-
-    def update_loadstring_creator(self, *_):
-        value = self.creator_input.text().strip()
-        if not value:
-            self.creator_output.clear()
-            self.show_creator_status("")
-            return
-        try:
-            result = make_loadstring_url(value)
-        except ValueError as exc:
-            self.creator_output.clear()
-            self.show_creator_status(str(exc))
-            return
-        self.creator_output.setText(result)
-        self.show_creator_status("")
-
-    def update_raw_url(self, *_):
-        value = self.github_input.text().strip()
-        if not value:
-            self.github_output.clear()
-            self.show_github_status("")
-            return
-        try:
-            raw = github_raw_url(value)
-        except ValueError as exc:
-            self.github_output.clear()
-            self.show_github_status(str(exc))
-            return
-        self.github_output.setText(raw)
-        self.show_github_status("")
-
-    def closeEvent(self, event):
-        if self.fetch_cancel is not None:
-            self.fetch_cancel.set()
-        self.fetch_button.setEnabled(True)
-        self.fetch_to_script_button.setEnabled(
-            self.fetch_output.SendScintilla(self.fetch_output.SCI_GETLENGTH) > 0
-        )
-        if hasattr(self, "deob_button"):
-            self.deob_button.setEnabled(not self.deob_running)
-        self.show_fetch_status("")
-        event.accept()
+                                                               
+import lelsploit_scriptblox as _lelsploit_scriptblox
+_lelsploit_scriptblox.configure_host(globals())
+scriptblox_script_key = _lelsploit_scriptblox.scriptblox_script_key
+load_saved_scripts = _lelsploit_scriptblox.load_saved_scripts
+save_saved_scripts = _lelsploit_scriptblox.save_saved_scripts
+read_limited = _lelsploit_scriptblox.read_limited
+scriptblox_curl_bytes = _lelsploit_scriptblox.scriptblox_curl_bytes
+scriptblox_request_bytes = _lelsploit_scriptblox.scriptblox_request_bytes
+scriptblox_catalog_request = _lelsploit_scriptblox.scriptblox_catalog_request
+_scriptblox_title_from_slug = _lelsploit_scriptblox._scriptblox_title_from_slug
+_scriptblox_parse_site_scripts = _lelsploit_scriptblox._scriptblox_parse_site_scripts
+scriptblox_web_catalog = _lelsploit_scriptblox.scriptblox_web_catalog
+scriptblox_raw_source = _lelsploit_scriptblox.scriptblox_raw_source
+fetch_scriptblox = _lelsploit_scriptblox.fetch_scriptblox
+fetch_scriptblox_raw = _lelsploit_scriptblox.fetch_scriptblox_raw
+fetch_scriptblox_saved_raw = _lelsploit_scriptblox.fetch_scriptblox_saved_raw
+ScriptBloxInstallDialog = _lelsploit_scriptblox.ScriptBloxInstallDialog
+ScriptBloxWindow = _lelsploit_scriptblox.ScriptBloxWindow
+
+
+                                                   
+
+
+                                       
+import lelsploit_tools as _lelsploit_tools
+_lelsploit_tools.configure_host(globals())
+HoverCopyButton = _lelsploit_tools.HoverCopyButton
+HoverCopyLineEdit = _lelsploit_tools.HoverCopyLineEdit
+ToolsWindow = _lelsploit_tools.ToolsWindow
+
+
+                                               
+
+
+                                         
 
 
 EXTENSION_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,79}$")
@@ -6541,6 +4804,14 @@ EXTENSION_STEP_PERMISSIONS = {
     "editor.goto_line": "editor",
     "editor.cursor": "editor",
     "editor.line": "editor",
+    "editor.undo": "editor",
+    "editor.redo": "editor",
+    "editor.cut": "editor",
+    "editor.copy": "editor",
+    "editor.paste": "editor",
+    "editor.duplicate_line": "editor",
+    "editor.delete_line": "editor",
+    "selection.info": "editor",
     "selection.replace": "editor",
     "selection.copy": "editor",
     "selection.delete": "editor",
@@ -6553,13 +4824,20 @@ EXTENSION_STEP_PERMISSIONS = {
     "tabs.set": "editor",
     "clipboard.set": "clipboard",
     "clipboard.append": "clipboard",
+    "clipboard.get": "clipboard",
+    "clipboard.clear": "clipboard",
     "console.log": "ui",
     "notify": "ui",
     "message": "ui",
     "dialog.input": "ui",
+    "dialog.multiline": "ui",
+    "dialog.choice": "ui",
+    "dialog.color": "ui",
     "dialog.confirm": "ui",
     "ui.open": "ui",
     "ui.window": "ui",
+    "ui.window.state": "ui",
+    "ui.menu.open": "ui",
     "ui.smooth_scroll": "ui",
     "visual_wizard.enable": "ui",
     "storage.set": "storage",
@@ -6568,16 +4846,27 @@ EXTENSION_STEP_PERMISSIONS = {
     "file.read": "files",
     "file.write": "files",
     "file.append": "files",
+    "file.read_bytes": "files",
+    "file.write_bytes": "files",
     "file.delete": "files",
     "file.list": "files",
+    "file.exists": "files",
+    "file.stat": "files",
+    "file.mkdir": "files",
+    "file.copy": "files",
+    "file.move": "files",
     "file.pick_read": "picker",
+    "file.pick_read_many": "picker",
     "file.pick_write": "picker",
+    "file.pick_folder": "picker",
     "http.request": "network",
+    "http.download": "network",
     "var.set": None,
     "var.append": None,
     "var.delete": None,
     "var.number": None,
     "system.now": None,
+    "system.uuid": None,
     "text.transform": None,
     "script.execute": "execute",
     "fastflag.set": "fastflags",
@@ -6598,6 +4887,8 @@ EXTENSION_STEP_PERMISSIONS = {
     "ui.panel.update": "ui",
     "ui.toolbar.add": "ui",
     "ui.toolbar.remove": "ui",
+    "ui.titlebar.add": "ui",
+    "ui.titlebar.remove": "ui",
     "ui.widget.get": "ui",
     "ui.widget.set": "ui",
     "ui.widget.invoke": "ui",
@@ -6690,6 +4981,12 @@ def normalize_extension_manifest(raw):
         fmt = 0
     if fmt != EXTENSION_FORMAT_VERSION:
         raise ValueError(f"Unsupported LEXT format {fmt}; this build supports format {EXTENSION_FORMAT_VERSION}.")
+    try:
+        api_version = max(1, int(raw.get("api", 1) or 1))
+    except (TypeError, ValueError):
+        api_version = 1
+    if api_version > EXTENSION_API_VERSION:
+        raise ValueError(f"This extension requires LExt API {api_version}; this build supports API {EXTENSION_API_VERSION}.")
     ext_id = _extension_manifest_text(raw.get("id"), limit=80).casefold()
     if not EXTENSION_ID_RE.fullmatch(ext_id):
         raise ValueError("Extension id must use lowercase letters, numbers, dots, dashes, or underscores.")
@@ -6805,7 +5102,8 @@ def normalize_extension_manifest(raw):
     
     allowed_events = {
         "editor.changed", "selection.changed", "tab.changed", "clipboard.changed",
-        "app.activated", "app.deactivated", "roblox.changed"
+        "app.activated", "app.deactivated", "roblox.changed",
+        "window.resized", "window.moved", "window.state_changed"
     }
     events = []
     source_events = raw.get("events", []) or []
@@ -6836,7 +5134,48 @@ def normalize_extension_manifest(raw):
     if len(source_panels) > 16:
         raise ValueError("An extension can define at most 16 panels.")
     seen_panel_ids = set()
-    control_types = {"label", "heading", "markdown", "input", "textarea", "checkbox", "switch", "combo", "list", "slider", "color", "button", "icon_button", "icon", "separator", "spacer"}
+    control_types = {"label", "heading", "markdown", "input", "textarea", "checkbox", "switch", "combo", "list", "slider", "color", "button", "icon_button", "icon", "card", "section", "row", "separator", "spacer"}
+    def clean_panel_controls(source, panel_id, seen_control_ids, depth=0, counter=None):
+        if counter is None:
+            counter = [0]
+        if depth > 8:
+            raise ValueError(f"Panel {panel_id!r} controls nest too deeply.")
+        if not isinstance(source, list) or len(source) > 160:
+            raise ValueError(f"Panel {panel_id!r} has an invalid controls list.")
+        clean = []
+        for control in source:
+            if not isinstance(control, dict):
+                continue
+            counter[0] += 1
+            if counter[0] > 160:
+                raise ValueError(f"Panel {panel_id!r} has more than 160 controls.")
+            ctype = str(control.get("type", "label") or "label").strip().casefold()
+            if ctype not in control_types:
+                raise ValueError(f"Panel {panel_id!r} uses unsupported control type {ctype!r}.")
+            item = dict(control)
+            item["type"] = ctype
+            cid = _extension_manifest_text(control.get("id"), "", 64)
+            if cid:
+                if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", cid) or cid in seen_control_ids:
+                    raise ValueError(f"Panel control id {cid!r} is invalid or duplicated.")
+                seen_control_ids.add(cid)
+                item["id"] = cid
+            action_ref = _extension_manifest_text(control.get("action"), "", 64)
+            on_change = _extension_manifest_text(control.get("on_change"), "", 64)
+            if action_ref and action_ref not in seen_action_ids:
+                raise ValueError(f"Panel control references unknown action {action_ref!r}.")
+            if on_change and on_change not in seen_action_ids:
+                raise ValueError(f"Panel control references unknown on_change action {on_change!r}.")
+            if action_ref:
+                item["action"] = action_ref
+            if on_change:
+                item["on_change"] = on_change
+            if ctype in {"card", "section", "row"}:
+                children = control.get("controls", control.get("children", [])) or []
+                item["controls"] = clean_panel_controls(children, panel_id, seen_control_ids, depth + 1, counter)
+                item.pop("children", None)
+            clean.append(item)
+        return clean
     for index, panel in enumerate(source_panels):
         if not isinstance(panel, dict):
             continue
@@ -6844,37 +5183,20 @@ def normalize_extension_manifest(raw):
         if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", panel_id) or panel_id in seen_panel_ids:
             raise ValueError(f"Panel id {panel_id!r} is invalid or duplicated.")
         seen_panel_ids.add(panel_id)
-        controls = panel.get("controls", []) or []
-        if not isinstance(controls, list) or len(controls) > 80:
-            raise ValueError(f"Panel {panel_id!r} has an invalid controls list.")
-        clean_controls = []
-        seen_control_ids = set()
-        for cindex, control in enumerate(controls):
-            if not isinstance(control, dict):
-                continue
-            ctype = str(control.get("type", "label") or "label").strip().casefold()
-            if ctype not in control_types:
-                raise ValueError(f"Panel {panel_id!r} uses unsupported control type {ctype!r}.")
-            item = dict(control); item["type"] = ctype
-            cid = _extension_manifest_text(control.get("id"), "", 64)
-            if cid:
-                if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", cid) or cid in seen_control_ids:
-                    raise ValueError(f"Panel control id {cid!r} is invalid or duplicated.")
-                seen_control_ids.add(cid); item["id"] = cid
-            if ctype in {"button", "icon_button"}:
-                action_ref = _extension_manifest_text(control.get("action"), "", 64)
-                if action_ref and action_ref not in seen_action_ids:
-                    raise ValueError(f"Panel button references unknown action {action_ref!r}.")
-                item["action"] = action_ref
-            clean_controls.append(item)
-        try: width = max(320, min(1400, int(panel.get("width", 620) or 620)))
+        clean_controls = clean_panel_controls(panel.get("controls", []) or [], panel_id, set())
+        try: width = max(320, min(1600, int(panel.get("width", 620) or 620)))
         except (TypeError, ValueError): width = 620
-        try: height = max(240, min(1000, int(panel.get("height", 520) or 520)))
+        try: height = max(240, min(1100, int(panel.get("height", 520) or 520)))
         except (TypeError, ValueError): height = 520
         panels.append({
             "id": panel_id,
             "title": _extension_manifest_text(panel.get("title"), name, 100) or name,
-            "width": width, "height": height, "controls": clean_controls,
+            "description": _extension_manifest_text(panel.get("description", panel.get("subtitle")), "", 1000),
+            "width": width,
+            "height": height,
+            "spacing": max(0, min(32, int(panel.get("spacing", 9) or 9))),
+            "resizable": bool(panel.get("resizable", True)),
+            "controls": clean_controls,
         })
 
     watchers = []
@@ -6924,6 +5246,7 @@ def normalize_extension_manifest(raw):
 
     return {
         "format": EXTENSION_FORMAT_VERSION,
+        "api": api_version,
         "id": ext_id,
         "name": name,
         "version": version,
@@ -6947,7 +5270,7 @@ def read_extension_package(path):
     if not path.is_file():
         raise FileNotFoundError(path)
     if path.stat().st_size > EXTENSION_PACKAGE_LIMIT:
-        raise ValueError("Extension package is larger than 32 MiB.")
+        raise ValueError("Extension package is larger than 10 MiB.")
     if path.suffix.casefold() != ".lext":
         raise ValueError("Extension packages must use the .lext extension.")
     if not zipfile.is_zipfile(path):
@@ -7018,11 +5341,16 @@ class LelExtensionRuntime:
     _template_re = re.compile(r"\$\{([A-Za-z0-9_.-]+)\}")
 
     def __init__(self, owner):
+        global _ACTIVE_LEXT_RUNTIME
         self.owner = owner
         self._panels = {}
         self._toolbar_buttons = {}
+        self._titlebar_buttons = {}
+        self._titlebar_specs = {}
         self._widget_watchers = {}
         self._runtime_timers = {}
+        self._action_window = None
+        _ACTIVE_LEXT_RUNTIME = self
 
     def _find_action(self, manifest, action_id):
         action_id = str(action_id or "").strip()
@@ -7065,13 +5393,13 @@ class LelExtensionRuntime:
         return QIcon()
 
     def _host_icon(self, name, size=18):
-        """Resolve a read-only icon from LelSploit's icons directory.
 
-        Extensions can use host:save, icons/save.png, or just save. Plain names
-        fall back to host icons only when a package resource with that name is
-        not present. app_icon() is used so Visual Wizard icon tinting still
-        applies consistently.
-        """
+
+
+
+
+
+
         value = str(name or "").strip().replace("\\", "/")
         for prefix in ("host:", "icon:", "icons:"):
             if value.casefold().startswith(prefix):
@@ -7119,6 +5447,127 @@ class LelExtensionRuntime:
                 break
         return sorted(set(names), key=str.casefold)
 
+    def _run_action_for_window(self, package, action_id, window):
+        previous = self._action_window
+        self._action_window = window if isinstance(window, QWidget) else None
+        try:
+            action = self._find_action(package.get("manifest") or {}, action_id)
+            if action is not None:
+                return self.run(package, action)
+        finally:
+            self._action_window = previous
+        return False
+
+    @staticmethod
+    def _titlebar_scope_matches(titlebar, target, owner):
+        window = getattr(titlebar, "owner_window", None)
+        if not isinstance(window, QWidget):
+            return False
+        target = str(target or "main").strip().casefold()
+        if target == "all":
+            return True
+        if target == "active":
+            return window is QApplication.activeWindow()
+        return window is owner
+
+    def _create_titlebar_button(self, package, spec, titlebar):
+        manifest = package.get("manifest") or {}
+        ext_id = str(manifest.get("id", "") or "")
+        button_id = str(spec.get("id", "runtime") or "runtime")[:64]
+        key = (ext_id, button_id, id(titlebar))
+        existing = self._titlebar_buttons.get(key)
+        if existing is not None:
+            return existing
+        if titlebar is None or titlebar.layout() is None:
+            return None
+        if not self._titlebar_scope_matches(titlebar, spec.get("target", "main"), self.owner):
+            return None
+        action_id = str(spec.get("action", "") or "").strip()
+        if self._find_action(manifest, action_id) is None:
+            raise ValueError("ui.titlebar.add requires a valid action id.")
+        button = QPushButton("")
+        button.setObjectName("blurWindowControl")
+        button.setToolTip(str(spec.get("tooltip", manifest.get("name", "Extension")))[:120])
+        button.setFixedSize(30, 28)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.setAutoDefault(False)
+        button.setDefault(False)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        icon_name = str(spec.get("icon", "") or "")
+        icon = self._resolve_icon(package, icon_name, 15) if icon_name else QIcon()
+        if not icon.isNull():
+            button.setIcon(icon)
+            button.setIconSize(QSize(15, 15))
+        window = getattr(titlebar, "owner_window", self.owner)
+        button.clicked.connect(lambda checked=False, p=package, aid=action_id, w=window: self._run_action_for_window(p, aid, w))
+        layout = titlebar.layout()
+        position = str(spec.get("position", "after_minimize") or "after_minimize").strip().casefold()
+        min_button = getattr(titlebar, "min_button", None)
+        close_button = getattr(titlebar, "close_button", None)
+        pin_button = getattr(titlebar, "pin_button", None)
+        if position == "before_minimize" and min_button is not None:
+            index = layout.indexOf(min_button)
+        elif position == "before_close" and close_button is not None:
+            index = layout.indexOf(close_button)
+        elif position == "after_pin" and pin_button is not None:
+            index = layout.indexOf(pin_button) + 1
+        elif min_button is not None:
+            index = layout.indexOf(min_button) + 1
+        elif close_button is not None:
+            index = layout.indexOf(close_button)
+        else:
+            index = layout.count()
+        layout.insertWidget(max(0, index), button)
+        self._titlebar_buttons[key] = button
+        button.destroyed.connect(lambda _=None, k=key: self._titlebar_buttons.pop(k, None))
+        return button
+
+    def sync_titlebar(self, titlebar):
+        for package, spec in list(self._titlebar_specs.values()):
+            try:
+                self._create_titlebar_button(package, spec, titlebar)
+            except Exception:
+                pass
+
+    def _add_titlebar_button(self, package, spec):
+        manifest = package.get("manifest") or {}
+        ext_id = str(manifest.get("id", "") or "")
+        button_id = str(spec.get("id", "runtime") or "runtime")[:64]
+        action_id = str(spec.get("action", "") or "").strip()
+        if self._find_action(manifest, action_id) is None:
+            raise ValueError("ui.titlebar.add requires a valid action id.")
+        spec = dict(spec)
+        target = str(spec.get("target", "main") or "main").strip().casefold()
+        if target not in {"main", "all", "active"}:
+            raise ValueError("ui.titlebar.add target must be main, all, or active.")
+        spec["target"] = target
+        reg_key = (ext_id, button_id)
+        self._titlebar_specs[reg_key] = (package, spec)
+        created = None
+        for window in QApplication.topLevelWidgets():
+            titlebar = getattr(window, "_blur_title_bar", None)
+            if titlebar is not None:
+                button = self._create_titlebar_button(package, spec, titlebar)
+                if button is not None and created is None:
+                    created = button
+        if created is None and target == "main":
+            titlebar = getattr(self.owner, "_blur_title_bar", None)
+            if titlebar is not None:
+                created = self._create_titlebar_button(package, spec, titlebar)
+        return created
+
+    def _remove_titlebar_button(self, ext_id, button_id):
+        ext_id = str(ext_id or "")
+        button_id = str(button_id or "")[:64]
+        self._titlebar_specs.pop((ext_id, button_id), None)
+        for key, button in list(self._titlebar_buttons.items()):
+            if key[0] == ext_id and key[1] == button_id:
+                try:
+                    button.deleteLater()
+                except Exception:
+                    pass
+                self._titlebar_buttons.pop(key, None)
+
     def retain_extensions(self, enabled_ids):
         enabled_ids = set(enabled_ids or ())
         for key, button in list(self._toolbar_buttons.items()):
@@ -7126,6 +5575,14 @@ class LelExtensionRuntime:
                 try: button.deleteLater()
                 except Exception: pass
                 self._toolbar_buttons.pop(key, None)
+        for key in list(self._titlebar_specs):
+            if key[0] not in enabled_ids:
+                self._titlebar_specs.pop(key, None)
+        for key, button in list(self._titlebar_buttons.items()):
+            if key[0] not in enabled_ids:
+                try: button.deleteLater()
+                except Exception: pass
+                self._titlebar_buttons.pop(key, None)
         for key, panel in list(self._panels.items()):
             if key[0] not in enabled_ids:
                 try: panel.close(); panel.deleteLater()
@@ -7236,6 +5693,16 @@ class LelExtensionRuntime:
         if prop == "object_name": return str(widget.objectName())
         if prop == "width": return str(widget.width())
         if prop == "height": return str(widget.height())
+        if prop == "x": return str(widget.x())
+        if prop == "y": return str(widget.y())
+        if prop == "geometry":
+            geo = widget.geometry(); return json.dumps({"x": geo.x(), "y": geo.y(), "width": geo.width(), "height": geo.height()})
+        if prop == "minimum_width": return str(widget.minimumWidth())
+        if prop == "minimum_height": return str(widget.minimumHeight())
+        if prop == "maximum_width": return str(widget.maximumWidth())
+        if prop == "maximum_height": return str(widget.maximumHeight())
+        if prop == "read_only" and hasattr(widget, "isReadOnly"): return "true" if widget.isReadOnly() else "false"
+        if prop == "window_opacity" and widget.isWindow(): return str(widget.windowOpacity())
         if prop in {"style", "stylesheet"}: return str(widget.styleSheet())
         raise ValueError(f"Unsupported widget property: {prop}")
 
@@ -7260,6 +5727,12 @@ class LelExtensionRuntime:
         if prop == "minimum_height": widget.setMinimumHeight(max(0, int(float(value)))); return
         if prop == "maximum_width": widget.setMaximumWidth(max(0, int(float(value)))); return
         if prop == "maximum_height": widget.setMaximumHeight(max(0, int(float(value)))); return
+        if prop == "width": widget.resize(max(1, int(float(value))), widget.height()); return
+        if prop == "height": widget.resize(widget.width(), max(1, int(float(value)))); return
+        if prop == "x": widget.move(int(float(value)), widget.y()); return
+        if prop == "y": widget.move(widget.x(), int(float(value))); return
+        if prop == "read_only" and hasattr(widget, "setReadOnly"): widget.setReadOnly(self._as_bool(value)); return
+        if prop == "window_opacity" and widget.isWindow(): widget.setWindowOpacity(max(0.2, min(1.0, float(value)))); return
         raise ValueError(f"Unsupported writable widget property: {prop}")
 
     @staticmethod
@@ -7306,6 +5779,7 @@ class LelExtensionRuntime:
             "app.busy": "true" if bool(getattr(self.owner, "busy", False)) else "false",
             "app.tab_count": str(self.owner.editor_tabs.count() if hasattr(self.owner, "editor_tabs") else 0),
             "app.current_tab": str(self.owner.current_tab_name() if hasattr(self.owner, "current_tab_name") else ""),
+            "app.extension_api": str(EXTENSION_API_VERSION),
         })
         join = current_roblox_join_context(require_running=False) or {}
         context["roblox.place_id"] = str(join.get("place_id", "") or "")
@@ -7460,14 +5934,20 @@ class LelExtensionRuntime:
         parts = [part for part in relative.split("/") if part not in {"", "."}]
         if not parts or any(part == ".." for part in parts):
             raise ValueError("App file path contains an invalid segment.")
-        root = BASE_DIR.resolve()
+        root = RUNTIME_DIR.resolve()
         target = (root / Path(*parts)).resolve()
         if target != root and root not in target.parents:
             raise ValueError("App file path escaped the LelSploit folder.")
+        lowered = [part.casefold() for part in target.relative_to(root).parts]
+        if any(part.startswith(".") for part in lowered):
+            raise PermissionError("Hidden application files are not exposed to extensions.")
+        name = target.name.casefold()
+        if name in {"settings.json", "startup_error.log"} or target.suffix.casefold() in {".key", ".pfx", ".p12"}:
+            raise PermissionError("This application file is not exposed to extensions.")
         return target
 
     def _app_file_listing(self, relative=""):
-        root = BASE_DIR.resolve()
+        root = RUNTIME_DIR.resolve()
         start = root if not str(relative or "").strip() else self._app_read_path(relative)
         if not start.exists(): return []
         paths = [start] if start.is_file() else start.rglob("*")
@@ -7476,7 +5956,12 @@ class LelExtensionRuntime:
             try:
                 resolved = path.resolve()
                 if resolved != root and root not in resolved.parents: continue
-                rel = resolved.relative_to(root).as_posix()
+                rel_path = resolved.relative_to(root)
+                lowered = [part.casefold() for part in rel_path.parts]
+                if any(part.startswith(".") for part in lowered): continue
+                if resolved.name.casefold() in {"settings.json", "startup_error.log"}: continue
+                if resolved.suffix.casefold() in {".key", ".pfx", ".p12"}: continue
+                rel = rel_path.as_posix()
                 stat = resolved.stat()
                 out.append({"path": rel, "type": "dir" if resolved.is_dir() else "file", "size": int(stat.st_size) if resolved.is_file() else 0})
             except (OSError, ValueError):
@@ -7836,6 +6321,30 @@ class LelExtensionRuntime:
                 if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", save_as):
                     raise ValueError("save_as is invalid.")
                 context[f"var.{save_as}"] = self._bounded(value, "Editor line")
+            elif op == "editor.undo":
+                editor.undo()
+            elif op == "editor.redo":
+                editor.redo()
+            elif op == "editor.cut":
+                editor.cut()
+            elif op == "editor.copy":
+                editor.copy()
+            elif op == "editor.paste":
+                editor.paste()
+            elif op == "editor.duplicate_line":
+                line, _ = editor.getCursorPosition(); text = editor.text(line).rstrip("\r\n"); editor.setCursorPosition(line, len(text)); editor.insert("\n" + text)
+            elif op == "editor.delete_line":
+                line, _ = editor.getCursorPosition()
+                if line + 1 < editor.lines(): editor.setSelection(line, 0, line + 1, 0)
+                else: editor.setSelection(line, 0, line, len(editor.text(line).rstrip("\r\n")))
+                editor.removeSelectedText()
+            elif op == "selection.info":
+                save_as = self._safe_save_name(step.get("save_as", "selection"), "selection")
+                if editor.hasSelectedText():
+                    line1, index1, line2, index2 = editor.getSelection(); payload = {"selected": True, "text": editor.selectedText(), "start_line": line1 + 1, "start_index": index1, "end_line": line2 + 1, "end_index": index2}
+                else:
+                    line1, index1 = editor.getCursorPosition(); payload = {"selected": False, "text": "", "start_line": line1 + 1, "start_index": index1, "end_line": line1 + 1, "end_index": index1}
+                context[f"var.{save_as}"] = self._bounded(json.dumps(payload, ensure_ascii=False), "Selection info")
             elif op == "editor.replace":
                 source = editor.text()
                 find = self._render(step.get("find", ""), context)
@@ -7920,6 +6429,11 @@ class LelExtensionRuntime:
                 QApplication.clipboard().setText(self._render(step.get("text", ""), context))
             elif op == "clipboard.append":
                 QApplication.clipboard().setText(self._bounded(QApplication.clipboard().text() + self._render(step.get("text", ""), context)))
+            elif op == "clipboard.get":
+                save_as = self._safe_save_name(step.get("save_as", "clipboard"), "clipboard")
+                context[f"var.{save_as}"] = self._bounded(QApplication.clipboard().text(), "Clipboard text")
+            elif op == "clipboard.clear":
+                QApplication.clipboard().clear()
             elif op == "console.log":
                 level = str(step.get("level", "info")).strip().casefold()
                 if level not in {"info", "success", "warning"}:
@@ -7941,6 +6455,35 @@ class LelExtensionRuntime:
                     raise ValueError("save_as is invalid.")
                 context[f"var.{save_as}"] = self._bounded(value if ok else "", "Dialog result")
                 context[f"var.{save_as}.accepted"] = "true" if ok else "false"
+            elif op == "dialog.multiline":
+                title = self._render(step.get("title", manifest["name"]), context)[:100]
+                prompt = self._render(step.get("prompt", "Value:"), context)[:500]
+                default = self._render(step.get("default", ""), context)[:65536]
+                value, ok = QInputDialog.getMultiLineText(self.owner, title, prompt, default)
+                save_as = self._safe_save_name(step.get("save_as", "input"), "input")
+                context[f"var.{save_as}"] = self._bounded(value if ok else "", "Dialog result")
+                context[f"var.{save_as}.accepted"] = "true" if ok else "false"
+            elif op == "dialog.choice":
+                title = self._render(step.get("title", manifest["name"]), context)[:100]
+                prompt = self._render(step.get("prompt", "Choose:"), context)[:500]
+                raw_options = step.get("options", [])
+                if isinstance(raw_options, str):
+                    raw_options = [part for part in self._render(raw_options, context).splitlines() if part]
+                options = [self._render(item, context)[:300] for item in raw_options[:200]] if isinstance(raw_options, list) else []
+                if not options:
+                    raise ValueError("dialog.choice requires at least one option.")
+                value, ok = QInputDialog.getItem(self.owner, title, prompt, options, 0, self._as_bool(step.get("editable", False)))
+                save_as = self._safe_save_name(step.get("save_as", "choice"), "choice")
+                context[f"var.{save_as}"] = self._bounded(value if ok else "", "Dialog choice")
+                context[f"var.{save_as}.accepted"] = "true" if ok else "false"
+            elif op == "dialog.color":
+                initial = QColor(self._render(step.get("value", "#ffffff"), context))
+                if not initial.isValid():
+                    initial = QColor("#ffffff")
+                chosen = QColorDialog.getColor(initial, self.owner, self._render(step.get("title", "Choose a color"), context)[:100])
+                save_as = self._safe_save_name(step.get("save_as", "color"), "color")
+                context[f"var.{save_as}"] = chosen.name() if chosen.isValid() else ""
+                context[f"var.{save_as}.accepted"] = "true" if chosen.isValid() else "false"
             elif op == "dialog.confirm":
                 title = self._render(step.get("title", manifest["name"]), context)[:100]
                 text = self._render(step.get("text", "Continue?"), context)[:2000]
@@ -7979,20 +6522,129 @@ class LelExtensionRuntime:
                 self.owner.visual_wizard_service.enable_extension(ext_id)
             elif op == "ui.window":
                 action_name = self._render(step.get("action", "show"), context).strip().casefold()
-                if action_name == "show":
-                    self.owner.show()
-                elif action_name == "hide":
-                    self.owner.hide()
-                elif action_name == "minimize":
-                    self.owner.showMinimized()
-                elif action_name == "maximize":
-                    self.owner.showMaximized()
-                elif action_name == "normal":
-                    self.owner.showNormal()
-                elif action_name == "raise":
-                    self.owner.showNormal(); self.owner.raise_(); self.owner.activateWindow()
+                target_name = self._render(step.get("target", "main"), context).strip().casefold()
+                if target_name in {"current", "trigger"} and isinstance(self._action_window, QWidget):
+                    target_window = self._action_window
+                elif target_name == "active" and isinstance(QApplication.activeWindow(), QWidget):
+                    target_window = QApplication.activeWindow()
                 else:
-                    raise ValueError("ui.window action must be show, hide, minimize, maximize, normal, or raise.")
+                    target_window = self.owner
+                if action_name == "show":
+                    target_window.show()
+                elif action_name == "hide":
+                    target_window.hide()
+                elif action_name == "minimize":
+                    target_window.showMinimized()
+                elif action_name == "maximize":
+                    target_window.showMaximized()
+                elif action_name in {"normal", "restore"}:
+                    target_window.showNormal()
+                elif action_name == "raise":
+                    target_window.show(); target_window.raise_(); target_window.activateWindow()
+                elif action_name == "fullscreen":
+                    target_window._lext_restore_maximized = target_window.isMaximized()
+                    target_window.showFullScreen()
+                elif action_name == "toggle_fullscreen":
+                    if target_window.isFullScreen():
+                        target_window.showMaximized() if bool(getattr(target_window, "_lext_restore_maximized", False)) else target_window.showNormal()
+                    else:
+                        target_window._lext_restore_maximized = target_window.isMaximized()
+                        target_window.showFullScreen()
+                elif action_name == "enable_resize":
+                    border = self._render(step.get("border", "7"), context)
+                    self.owner.extension_window_resize.set_extension(ext_id, True, border)
+                elif action_name == "disable_resize":
+                    self.owner.extension_window_resize.set_extension(ext_id, False)
+                elif action_name == "toggle_resize":
+                    enabled = not self.owner.extension_window_resize.enabled_for(ext_id)
+                    self.owner.extension_window_resize.set_extension(ext_id, enabled, self._render(step.get("border", "7"), context))
+                elif action_name == "resize":
+                    try:
+                        width = max(target_window.minimumWidth(), min(7680, int(float(self._render(step.get("width", "900"), context)))))
+                        height = max(target_window.minimumHeight(), min(4320, int(float(self._render(step.get("height", "640"), context)))))
+                    except (TypeError, ValueError):
+                        raise ValueError("ui.window resize requires numeric width and height.")
+                    target_window.showNormal(); target_window.resize(width, height)
+                elif action_name == "move":
+                    try:
+                        x = int(float(self._render(step.get("x", "0"), context)))
+                        y = int(float(self._render(step.get("y", "0"), context)))
+                    except (TypeError, ValueError):
+                        raise ValueError("ui.window move requires numeric x and y.")
+                    target_window.showNormal(); target_window.move(x, y)
+                elif action_name == "center":
+                    screen = target_window.screen() or QApplication.primaryScreen()
+                    if screen is not None:
+                        area = screen.availableGeometry(); frame = target_window.frameGeometry(); frame.moveCenter(area.center()); target_window.move(frame.topLeft())
+                elif action_name == "opacity":
+                    try:
+                        opacity = max(0.25, min(1.0, float(self._render(step.get("value", "1"), context))))
+                    except (TypeError, ValueError):
+                        raise ValueError("ui.window opacity requires a number from 0.25 to 1.0.")
+                    target_window.setWindowOpacity(opacity)
+                elif action_name == "always_on_top":
+                    enabled = self._as_bool(self._render(step.get("enabled", "true"), context))
+                    title_bar = getattr(target_window, "_blur_title_bar", None)
+                    if title_bar is not None and hasattr(title_bar, "set_pinned"):
+                        title_bar.pin_button.setChecked(enabled)
+                    else:
+                        was_visible = target_window.isVisible(); target_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, enabled)
+                        if was_visible: target_window.show()
+                else:
+                    raise ValueError("Unsupported ui.window action.")
+            elif op == "ui.window.state":
+                target_name = self._render(step.get("target", "main"), context).strip().casefold()
+                if target_name in {"current", "trigger"} and isinstance(self._action_window, QWidget):
+                    target_window = self._action_window
+                elif target_name == "active" and isinstance(QApplication.activeWindow(), QWidget):
+                    target_window = QApplication.activeWindow()
+                else:
+                    target_window = self.owner
+                screen = target_window.screen() or QApplication.primaryScreen()
+                geo = target_window.geometry()
+                payload = {
+                    "x": geo.x(), "y": geo.y(), "width": geo.width(), "height": geo.height(),
+                    "visible": target_window.isVisible(), "active": target_window.isActiveWindow(),
+                    "minimized": target_window.isMinimized(), "maximized": target_window.isMaximized(), "fullscreen": target_window.isFullScreen(),
+                    "resizable": bool(getattr(target_window, "_blur_title_bar", None)) and not (target_window.minimumWidth() == target_window.maximumWidth() and target_window.minimumHeight() == target_window.maximumHeight()),
+                    "opacity": target_window.windowOpacity(),
+                }
+                if screen is not None:
+                    area = screen.availableGeometry(); payload["screen"] = {"x": area.x(), "y": area.y(), "width": area.width(), "height": area.height(), "name": screen.name()}
+                save_as = self._safe_save_name(step.get("save_as", "window"), "window")
+                context[f"var.{save_as}"] = json.dumps(payload, ensure_ascii=False)
+                for key, value in payload.items():
+                    if not isinstance(value, dict): context[f"var.{save_as}.{key}"] = "true" if value is True else "false" if value is False else str(value)
+            elif op == "ui.menu.open":
+                raw_items = step.get("items", [])
+                if not isinstance(raw_items, list) or len(raw_items) > 50:
+                    raise ValueError("ui.menu.open items must be an array of at most 50 entries.")
+                menu = QMenu(self.owner)
+                action_map = {}
+                for item in raw_items:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("separator"):
+                        menu.addSeparator(); continue
+                    text = self._render(item.get("text", item.get("label", "Item")), context)[:120]
+                    action_ref = str(item.get("action", "") or "")
+                    if not action_ref or self._find_action(manifest, action_ref) is None:
+                        continue
+                    qaction = menu.addAction(text)
+                    qaction.setEnabled(self._as_bool(self._render(item.get("enabled", "true"), context)))
+                    if "checked" in item:
+                        qaction.setCheckable(True); qaction.setChecked(self._as_bool(self._render(item.get("checked", "false"), context)))
+                    action_map[qaction] = action_ref
+                try:
+                    menu_x = max(0, min(self.owner.width(), int(float(self._render(step.get("x", "10"), context) or 10))))
+                    menu_y = max(0, min(self.owner.height(), int(float(self._render(step.get("y", "45"), context) or 45))))
+                except (TypeError, ValueError):
+                    menu_x, menu_y = 10, 45
+                chosen = menu.exec(self.owner.mapToGlobal(QPoint(menu_x, menu_y)))
+                if chosen in action_map:
+                    selected = self._find_action(manifest, action_map[chosen])
+                    if selected is not None:
+                        self.run(package, selected, _context=context)
             elif op == "storage.set":
                 key = self._render(step.get("key", ""), context)
                 value = self._render(step.get("value", ""), context)
@@ -8035,6 +6687,41 @@ class LelExtensionRuntime:
                 if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", save_as):
                     raise ValueError("save_as is invalid.")
                 context[f"var.{save_as}"] = self._list_extension_files(ext_id)
+            elif op == "file.exists":
+                target = self._extension_data_path(ext_id, self._render(step.get("path", ""), context))
+                save_as = self._safe_save_name(step.get("save_as", "exists"), "exists")
+                context[f"var.{save_as}"] = "true" if target.exists() else "false"
+            elif op == "file.stat":
+                target = self._extension_data_path(ext_id, self._render(step.get("path", ""), context))
+                payload = {"exists": target.exists(), "file": target.is_file(), "directory": target.is_dir(), "size": target.stat().st_size if target.is_file() else 0, "modified": target.stat().st_mtime if target.exists() else 0}
+                save_as = self._safe_save_name(step.get("save_as", "stat"), "stat")
+                context[f"var.{save_as}"] = json.dumps(payload, ensure_ascii=False)
+            elif op == "file.mkdir":
+                target = self._extension_data_path(ext_id, self._render(step.get("path", ""), context), create_parent=True)
+                target.mkdir(parents=True, exist_ok=True)
+            elif op in {"file.copy", "file.move"}:
+                source = self._extension_data_path(ext_id, self._render(step.get("source", ""), context))
+                target = self._extension_data_path(ext_id, self._render(step.get("target", ""), context), create_parent=True)
+                if not source.is_file():
+                    raise FileNotFoundError(source.name)
+                if op == "file.copy": shutil.copy2(source, target)
+                else: shutil.move(str(source), str(target))
+            elif op == "file.read_bytes":
+                target = self._extension_data_path(ext_id, self._render(step.get("path", ""), context))
+                raw = target.read_bytes() if target.is_file() else b""
+                if len(raw) > EXTENSION_TEXT_LIMIT:
+                    raise ValueError("Extension binary file exceeded the 8 MiB limit.")
+                save_as = self._safe_save_name(step.get("save_as", "bytes"), "bytes")
+                context[f"var.{save_as}"] = base64.b64encode(raw).decode("ascii")
+            elif op == "file.write_bytes":
+                target = self._extension_data_path(ext_id, self._render(step.get("path", ""), context), create_parent=True)
+                try:
+                    raw = base64.b64decode(self._render(step.get("base64", step.get("data", "")), context), validate=True)
+                except Exception as exc:
+                    raise ValueError("file.write_bytes requires valid base64 data.") from exc
+                if len(raw) > EXTENSION_TEXT_LIMIT:
+                    raise ValueError("Extension binary file exceeded the 8 MiB limit.")
+                target.write_bytes(raw)
             elif op == "file.pick_read":
                 caption = self._render(step.get("title", "Choose a file"), context)[:120]
                 file_filter = self._render(step.get("filter", "Text files (*.txt *.lua *.luau *.json *.md);;All files (*)"), context)[:500]
@@ -8051,6 +6738,18 @@ class LelExtensionRuntime:
                         raise ValueError("Selected file exceeds the 8 MiB extension limit.")
                     context[f"var.{save_as}"] = self._bounded(target.read_text(encoding="utf-8", errors="replace"), "Selected file")
                     context[f"var.{save_as}.path"] = str(target)
+            elif op == "file.pick_read_many":
+                caption = self._render(step.get("title", "Choose files"), context)[:120]
+                file_filter = self._render(step.get("filter", "Text files (*.txt *.lua *.luau *.json *.md);;All files (*)"), context)[:500]
+                paths, _ = QFileDialog.getOpenFileNames(self.owner, caption, "", file_filter)
+                save_as = self._safe_save_name(step.get("save_as", "picked"), "picked")
+                rows = []
+                for raw_path in paths[:64]:
+                    target = Path(raw_path)
+                    if target.is_file() and target.stat().st_size <= EXTENSION_TEXT_LIMIT:
+                        rows.append({"path": str(target), "name": target.name, "text": target.read_text(encoding="utf-8", errors="replace")})
+                context[f"var.{save_as}"] = self._bounded(json.dumps(rows, ensure_ascii=False), "Selected files")
+                context[f"var.{save_as}.count"] = str(len(rows))
             elif op == "file.pick_write":
                 caption = self._render(step.get("title", "Save a file"), context)[:120]
                 suggested = self._render(step.get("name", "extension-output.txt"), context)[:200]
@@ -8062,8 +6761,30 @@ class LelExtensionRuntime:
                 if path:
                     Path(path).write_text(self._render(step.get("text", ""), context), encoding="utf-8", newline="\n")
                 context[f"var.{save_as}.path"] = str(path or "")
+            elif op == "file.pick_folder":
+                path = QFileDialog.getExistingDirectory(self.owner, self._render(step.get("title", "Choose a folder"), context)[:120], "")
+                save_as = self._safe_save_name(step.get("save_as", "folder"), "folder")
+                context[f"var.{save_as}"] = str(path or "")
+                context[f"var.{save_as}.accepted"] = "true" if path else "false"
             elif op == "http.request":
                 self._http_request(step, context)
+            elif op == "http.download":
+                url = self._validate_network_url(self._render(step.get("url", ""), context))
+                target = self._extension_data_path(ext_id, self._render(step.get("path", "download.bin"), context), create_parent=True)
+                request = urllib.request.Request(url, headers={"User-Agent": "LelSploit-Extension/1.0", "Accept": "*/*"})
+                runtime = self
+                class _DownloadRedirect(urllib.request.HTTPRedirectHandler):
+                    def redirect_request(self, req, fp, code, msg, hdrs, newurl):
+                        runtime._validate_network_url(newurl); return super().redirect_request(req, fp, code, msg, hdrs, newurl)
+                opener = urllib.request.build_opener(_DownloadRedirect())
+                with opener.open(request, timeout=20) as response:
+                    raw = response.read(EXTENSION_PACKAGE_LIMIT + 1)
+                if len(raw) > EXTENSION_PACKAGE_LIMIT:
+                    raise ValueError("Downloaded file exceeded the 10 MiB extension download limit.")
+                target.write_bytes(raw)
+                save_as = self._safe_save_name(step.get("save_as", "download"), "download")
+                context[f"var.{save_as}.path"] = str(target.relative_to(EXTENSION_DATA_DIR / ext_id).as_posix())
+                context[f"var.{save_as}.size"] = str(len(raw))
             elif op == "var.set":
                 save_as = str(step.get("name", "value") or "value").strip()
                 if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", save_as):
@@ -8103,6 +6824,9 @@ class LelExtensionRuntime:
                 now = datetime.now().astimezone()
                 context[f"var.{name}"] = now.isoformat(timespec="seconds")
                 context[f"var.{name}.unix"] = str(int(now.timestamp()))
+            elif op == "system.uuid":
+                save_as = self._safe_save_name(step.get("save_as", "uuid"), "uuid")
+                context[f"var.{save_as}"] = str(uuid.uuid4())
             elif op == "text.transform":
                 source = self._render(step.get("source", ""), context)
                 result = self._transform(source, step, context)
@@ -8135,6 +6859,9 @@ class LelExtensionRuntime:
                 context[f"var.{save_as}"] = self._bounded(value, "Package resource")
             elif op == "settings.get":
                 key = self._render(step.get("key", ""), context).strip()[:160]
+                sensitive = {"token", "password", "secret", "auth", "session", "cookie", "credential", "api_key", "apikey"}
+                if any(part.casefold() in sensitive for part in key.replace("\\", "/").split("/") if part):
+                    raise PermissionError("Sensitive settings are not exposed to extensions.")
                 default = self._render(step.get("default", ""), context)
                 value = self.owner.settings.value(key, default)
                 save_as = str(step.get("save_as", "setting") or "setting").strip()
@@ -8143,6 +6870,9 @@ class LelExtensionRuntime:
                 key = self._render(step.get("key", ""), context).strip()[:160]
                 if not key:
                     raise ValueError("settings.set requires a key.")
+                sensitive = {"token", "password", "secret", "auth", "session", "cookie", "credential", "api_key", "apikey"}
+                if any(part.casefold() in sensitive for part in key.replace("\\", "/").split("/") if part):
+                    raise PermissionError("Sensitive settings are not writable by extensions.")
                 value = self._render(step.get("value", ""), context)
                 value_type = str(step.get("type", "string") or "string").strip().casefold()
                 if value_type == "bool": value = self._as_bool(value)
@@ -8177,6 +6907,7 @@ class LelExtensionRuntime:
                     "tab_count": self.owner.editor_tabs.count(),
                     "current_tab": self.owner.current_tab_name(),
                     "window_visible": self.owner.isVisible(),
+                    "extension_api": EXTENSION_API_VERSION,
                 }
                 save_as = str(step.get("save_as", "state") or "state").strip()
                 value = states.get(name, states if not name else "")
@@ -8195,6 +6926,18 @@ class LelExtensionRuntime:
                 key = (ext_id, self._render(step.get("id", "runtime"), context)[:64])
                 button = self._toolbar_buttons.pop(key, None)
                 if button is not None: button.deleteLater()
+            elif op == "ui.titlebar.add":
+                spec = {
+                    "id": self._render(step.get("id", "runtime"), context)[:64],
+                    "tooltip": self._render(step.get("tooltip", manifest["name"]), context)[:120],
+                    "icon": self._render(step.get("icon", ""), context)[:160],
+                    "action": str(step.get("action", "") or ""),
+                    "position": self._render(step.get("position", "after_minimize"), context)[:40],
+                    "target": self._render(step.get("target", "main"), context)[:20],
+                }
+                self._add_titlebar_button(package, spec)
+            elif op == "ui.titlebar.remove":
+                self._remove_titlebar_button(ext_id, self._render(step.get("id", "runtime"), context)[:64])
             elif op == "ui.panel.open":
                 panel_id = self._render(step.get("id", ""), context).strip()
                 spec = self._find_panel(manifest, panel_id)
@@ -8421,7 +7164,7 @@ class LelExtensionRuntime:
                 for rec in scan_extension_packages():
                     m=rec.get("manifest")
                     if not m: continue
-                    item={"id":m["id"],"name":m["name"],"version":m["version"],"enabled":m["id"] not in disabled,"file":Path(rec["path"]).name,"permissions":m.get("permissions",[])}
+                    item={"id":m["id"],"name":m["name"],"version":m["version"],"api":m.get("api",1),"enabled":m["id"] not in disabled,"file":Path(rec["path"]).name,"permissions":m.get("permissions",[])}
                     if op=="extension.info" and m["id"]==target_id: records=item; break
                     if op=="extension.list": records.append(item)
                 save_as=self._safe_save_name(step.get("save_as","extensions"),"extensions"); context[f"var.{save_as}"]=json.dumps(records,ensure_ascii=False)
@@ -8499,12 +7242,12 @@ class LelExtensionRuntime:
 
 
 class ExtensionPanelWindow(QDialog):
-    """Declarative, sandboxed extension UI surface.
 
-    It deliberately exposes common controls and action dispatch rather than raw
-    QObject/native-code access. That makes custom extension UIs composable while
-    keeping the operating system outside the extension trust boundary.
-    """
+
+
+
+
+
     def __init__(self, runtime, owner, package, spec):
         super().__init__(owner)
         self.runtime = runtime
@@ -9583,515 +8326,179 @@ class VisualWizardService(QObject):
         self.window.show(); self.window.raise_(); self.window.activateWindow()
 
 
-class ExtensionsWindow(QDialog):
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.owner = parent
-        self.runtime = LelExtensionRuntime(parent)
-        self.setWindowTitle("Extensions")
-        self.resize(780, 640)
-        self.setMinimumSize(620, 440)
-        apply_window_icon(self)
+                                                                            
+                                                                            
+                                                   
+import lelsploit_extensions as _lelsploit_extensions
 
-        layout = blur_content_layout(self, self, "Extensions", (18, 12, 18, 16), 9)
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        top.addStretch(1)
-        self.install_button = QPushButton("Import Extension")
-        self.install_button.setObjectName("extensionPrimary")
-        icon = app_icon("extensions")
-        if not icon.isNull():
-            self.install_button.setIcon(icon)
-            self.install_button.setIconSize(QSize(17, 17))
-        self.install_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.install_button.clicked.connect(self.install_extension)
-        top.addWidget(self.install_button)
-        layout.addLayout(top)
+_lelsploit_extensions.configure_host(
+    LelComboBox=LelComboBox,
+    app_icon=app_icon,
+    apply_blur_style=apply_blur_style,
+    apply_window_icon=apply_window_icon,
+    blur_content_layout=blur_content_layout,
+    lelsploit_icon=lelsploit_icon,
+    extension_folder_signature=extension_folder_signature,
+    extension_template_icon=extension_template_icon,
+    load_extension_state=load_extension_state,
+    read_extension_package=read_extension_package,
+    save_extension_state=save_extension_state,
+    scan_extension_packages=scan_extension_packages,
+    write_extension_template=write_extension_template,
+    EXTENSION_TEMPLATES=EXTENSION_TEMPLATES,
+)
+ExtensionsWindow = _lelsploit_extensions.ExtensionsWindow
 
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.scroll.setObjectName("extensionScroll")
-        layout.addWidget(self.scroll, 1)
-
-        self.setStyleSheet(r"""
-            QDialog { background: #08090a; color: #e8e9ea; }
-            QWidget { background: transparent; color: #e8e9ea; }
-            QLabel { background: transparent; }
-            QScrollArea#extensionScroll { background: transparent; border: none; }
-            QFrame#extensionCard, QFrame#templateCard {
-                background: #0a0a0c; border: 1px solid #25252a; border-radius: 8px;
-            }
-            QFrame#extensionCard:hover, QFrame#templateCard:hover { border-color: #33333a; background: #0d0d10; }
-            QLabel#extensionTitle { color: #f1f1f3; font-size: 13px; font-weight: 600; }
-            QLabel#extensionMeta { color: #85858c; font-size: 10px; }
-            QLabel#extensionDescription { color: #aaaaaf; }
-            QLabel#extensionDescription a { color: #82aee8; }
-            QLabel#extensionError { color: #e99191; }
-            QLabel#extensionEmpty { color: #77777d; padding: 22px 10px; }
-            QLabel#extensionSection { color:#d6d6da; font-size:12px; font-weight:600; padding: 8px 1px 2px 1px; }
-            QPushButton {
-                background: #121214; color: #e9e9eb; border: 1px solid #2b2b30;
-                border-radius: 5px; padding: 6px 10px;
-            }
-            QPushButton:hover { background: #1a1a1e; border-color: #3a3a41; }
-            QPushButton:disabled { color: #5f5f66; background: #0c0c0e; border-color: #202024; }
-            QPushButton#extensionPrimary { background: #15181d; border-color: #303641; }
-            QPushButton#extensionPrimary:hover { background: #1d222a; border-color: #424a58; }
-            QPushButton#extensionIconButton, QPushButton#extensionRemoveIcon { padding:0; min-width:30px; max-width:30px; min-height:30px; max-height:30px; }
-            QPushButton#extensionRemoveIcon:hover { background:#241516; border-color:#553033; }
-            QScrollBar:vertical { width: 9px; background: transparent; }
-            QScrollBar::handle:vertical { background: #35353b; border-radius: 4px; min-height: 28px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        """)
-        apply_blur_style(self)
-        self._folder_signature = None
-        self.reload()
-        self._folder_watch_timer = QTimer(self)
-        self._folder_watch_timer.setInterval(1200)
-        self._folder_watch_timer.timeout.connect(self._poll_extension_folder)
-        self._folder_watch_timer.start()
-
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.reload()
-
-    @staticmethod
-    def _markdown_label(text):
-        label = QLabel(str(text or "No description found"))
-        label.setObjectName("extensionDescription")
-        label.setWordWrap(True)
-        label.setTextFormat(Qt.TextFormat.MarkdownText)
-        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        return label
-
-    @staticmethod
-    def _image_action_button(icon_name, tooltip, object_name="extensionIconButton"):
-        button = QPushButton()
-        button.setObjectName(object_name)
-        button.setFixedSize(30, 30)
-        button.setToolTip(tooltip)
-        button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setProperty("_lel_icon_name", icon_name)
-        icon = app_icon(icon_name)
-        if icon.isNull():
-            for path in (IMAGES_DIR / f"{icon_name}.png", ICON_DIR / f"{icon_name}.png"):
-                if path.is_file():
-                    icon = QIcon(str(path)); break
-        if not icon.isNull():
-            button.setIcon(icon)
-            button.setIconSize(QSize(17, 17))
-        return button
-
-    def _extension_icon(self, record):
-        icon_bytes = record.get("icon_bytes", b"")
-        if icon_bytes:
-            pixmap = QPixmap()
-            if pixmap.loadFromData(icon_bytes):
-                return QIcon(pixmap)
-        missing = IMAGES_DIR / "missing.png"
-        if missing.is_file():
-            icon = QIcon(str(missing))
-            if not icon.isNull():
-                return icon
-        icon = app_icon("extensions")
-        return icon if not icon.isNull() else lelsploit_icon()
-
-    @staticmethod
-    def _extension_folder_signature():
-        return extension_folder_signature()
-
-    def _poll_extension_folder(self):
-        if not self.isVisible():
-            return
-        signature = self._extension_folder_signature()
-        if signature != self._folder_signature:
-            self.owner.refresh_extensions_runtime()
-            self.reload()
-
-    def _clear_cards(self):
-        old = self.scroll.takeWidget()
-        if old is not None:
-            old.deleteLater()
-
-    def reload(self):
-        self._clear_cards()
-        records = scan_extension_packages()
-        disabled = set(load_extension_state().get("disabled", []))
-        installed_ids = {record["manifest"]["id"] for record in records if record.get("manifest")}
-
-        content = QWidget()
-        content.setStyleSheet("background: transparent;")
-        cards = QVBoxLayout(content)
-        cards.setContentsMargins(0, 2, 4, 2)
-        cards.setSpacing(8)
-
-        if not records:
-            empty = QLabel("No extensions installed.")
-            empty.setObjectName("extensionEmpty")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            cards.addWidget(empty)
-        else:
-            for record in records:
-                cards.addWidget(self._build_card(record, disabled))
-
-        available_templates = [template for template in EXTENSION_TEMPLATES if template["id"] not in installed_ids]
-        if available_templates:
-            template_title = QLabel("Templates")
-            template_title.setObjectName("extensionSection")
-            cards.addWidget(template_title)
-            for template in available_templates:
-                cards.addWidget(self._build_template_card(template))
-        cards.addStretch(1)
-        self.scroll.setWidget(content)
-        self._folder_signature = self._extension_folder_signature()
-
-    def _build_card(self, record, disabled):
-        card = QFrame(); card.setObjectName("extensionCard")
-        root = QHBoxLayout(card); root.setContentsMargins(12, 11, 11, 11); root.setSpacing(11)
-
-        icon_label = QLabel(); icon_label.setFixedSize(46, 46); icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon = self._extension_icon(record)
-        if not icon.isNull(): icon_label.setPixmap(icon.pixmap(40, 40))
-        root.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
-
-        info = QVBoxLayout(); info.setContentsMargins(0, 0, 0, 0); info.setSpacing(3)
-        manifest = record.get("manifest")
-        if manifest is None:
-            title = QLabel("No title found"); title.setObjectName("extensionTitle"); info.addWidget(title)
-            info.addWidget(self._markdown_label("No description found"))
-            error = QLabel(record.get("error", "Invalid extension package")); error.setObjectName("extensionError"); error.setWordWrap(True); info.addWidget(error)
-        else:
-            title = QLabel(manifest.get("name") or "No title found"); title.setObjectName("extensionTitle"); info.addWidget(title)
-            meta_bits = [f"v{manifest['version']}", manifest["id"]]
-            if manifest.get("permissions"): meta_bits.append("permissions: " + ", ".join(manifest["permissions"]))
-            meta = QLabel("  ·  ".join(meta_bits)); meta.setObjectName("extensionMeta"); meta.setWordWrap(True); info.addWidget(meta)
-            info.addWidget(self._markdown_label(manifest.get("description") or "No description found"))
-        root.addLayout(info, 1)
-
-        buttons = QVBoxLayout(); buttons.setContentsMargins(0, 0, 0, 0); buttons.setSpacing(6)
-        if manifest is not None:
-            ext_id = manifest["id"]
-            is_disabled = ext_id in disabled
-            toggle = self._image_action_button("enable" if is_disabled else "disable", "Enable extension" if is_disabled else "Disable extension")
-            toggle.clicked.connect(lambda checked=False, eid=ext_id: self.toggle_extension(eid))
-            buttons.addWidget(toggle)
-        remove = self._image_action_button("remove", "Remove extension", "extensionRemoveIcon")
-        remove.clicked.connect(lambda checked=False, r=record: self.remove_extension(r))
-        buttons.addWidget(remove)
-        buttons.addStretch(1)
-        root.addLayout(buttons)
-        return card
-
-    def _build_template_card(self, template):
-        card = QFrame(); card.setObjectName("templateCard")
-        root = QHBoxLayout(card); root.setContentsMargins(12, 11, 11, 11); root.setSpacing(11)
-        icon_label = QLabel(); icon_label.setFixedSize(46, 46); icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon = extension_template_icon()
-        if not icon.isNull(): icon_label.setPixmap(icon.pixmap(40, 40))
-        root.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
-        info = QVBoxLayout(); info.setContentsMargins(0, 0, 0, 0); info.setSpacing(3)
-        title = QLabel(template["name"]); title.setObjectName("extensionTitle"); info.addWidget(title)
-        meta = QLabel("Template  ·  " + ", ".join(template.get("permissions", []))); meta.setObjectName("extensionMeta"); info.addWidget(meta)
-        info.addWidget(self._markdown_label(template["description"]))
-        root.addLayout(info, 1)
-        install = self._image_action_button("install", "Install template")
-        install.clicked.connect(lambda checked=False, t=template: self.install_template(t))
-        root.addWidget(install, 0, Qt.AlignmentFlag.AlignTop)
-        return card
-
-    def install_template(self, template):
-        try:
-            target = write_extension_template(template)
-            record = read_extension_package(target)
-            self.owner.log(f"Installed extension template {record['manifest']['name']}.", "success")
-            self.owner.refresh_extensions_runtime(restart_id=record["manifest"]["id"])
-            self.reload()
-        except Exception as exc:
-            QMessageBox.warning(self, "Install template", f"Could not install this template.\n\n{exc}")
-
-    def install_extension(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import Extension", "", "LelSploit extensions (*.lext)")
-        if not path: return
-        source = Path(path)
-        try:
-            record = read_extension_package(source)
-            EXTENSIONS_DIR.mkdir(parents=True, exist_ok=True)
-            target = EXTENSIONS_DIR / source.name
-            if target.exists() and target.resolve() != source.resolve():
-                answer = QMessageBox.question(self, "Replace extension?", f"{target.name} is already installed. Replace it?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
-                if answer != QMessageBox.StandardButton.Yes: return
-            if target.resolve() != source.resolve(): shutil.copy2(source, target)
-            self.owner.log(f"Installed extension {record['manifest']['name']}.", "success")
-            self.owner.refresh_extensions_runtime(restart_id=record["manifest"]["id"])
-            self.reload()
-        except Exception as exc:
-            QMessageBox.warning(self, "Import Extension", f"Could not import this extension.\n\n{exc}")
-
-    def toggle_extension(self, ext_id):
-        state = load_extension_state(); disabled = set(state.get("disabled", []))
-        if ext_id in disabled: disabled.discard(ext_id)
-        else: disabled.add(ext_id)
-        state["disabled"] = sorted(disabled); save_extension_state(state)
-        self.owner.refresh_extensions_runtime(restart_id=ext_id if ext_id not in disabled else None)
-        self.reload()
-
-    def remove_extension(self, record):
-        manifest = record.get("manifest")
-        try:
-            record["path"].unlink(missing_ok=True)
-            if manifest:
-                ext_id = manifest["id"]
-                state = load_extension_state(); disabled = set(state.get("disabled", [])); disabled.discard(ext_id)
-                state["disabled"] = sorted(disabled); state.get("data", {}).pop(ext_id, None); save_extension_state(state)
-                shutil.rmtree(EXTENSION_DATA_DIR / ext_id, ignore_errors=True)
-                self.owner.refresh_extensions_runtime()
-            self.reload()
-        except OSError as exc:
-            QMessageBox.warning(self, "Remove extension", str(exc))
 
 
 EXTENSIONS_DOCUMENTATION_HTML = r"""
 <style>
 body { color:#d4d4d4; font-family:'Segoe UI'; font-size:10.5pt; line-height:1.55; background:#0b0c0d; margin:0; }
-h1,h2,h3 { color:#f0f0f2; } h1 { font-size:20pt; } h2 { margin-top:20px; font-size:14pt; }
-code,pre { font-family:Consolas,monospace; } code { color:#a9d8ff; } pre { background:#0b0b0d; border:1px solid #242429; padding:10px; border-radius:6px; }
+h1,h2,h3 { color:#f0f0f2; } h1 { font-size:20pt; } h2 { margin-top:22px; font-size:14pt; } h3 { margin-top:15px; font-size:11.5pt; }
+code,pre { font-family:Consolas,monospace; } code { color:#a9d8ff; } pre { background:#0b0b0d; border:1px solid #242429; padding:10px; border-radius:6px; white-space:pre-wrap; }
 table { border-collapse:collapse; width:100%; margin:8px 0 14px 0; } th,td { border:1px solid #29292f; padding:6px 8px; text-align:left; vertical-align:top; } th { background:#101014; color:#f2f2f4; }
 strong { color:#f3f3f5; } li { margin:3px 0; } .note { border-left:3px solid #3a4d63; padding:7px 10px; background:#0a0b0d; }
+.good { border-left:3px solid #316d4c; padding:7px 10px; background:#09100c; }
 </style>
 <h1>Extensions / LExt API</h1>
-<p>LExt v1 is LelSploit's declarative extension format. It is designed around composable operations: extensions can build windows and toolbar controls, watch LelSploit events/widgets, manipulate editors/tabs, use public HTTP, perform advanced math/data work, inspect Roblox session state, drive Attach/Execute/proxy actions, play sounds, manage extensions, and read LelSploit files while keeping writes inside their own data directory.</p>
+<p>LExt v1 is LelSploit's declarative extension system. It is designed to let marketplace extensions behave like real application add-ons without receiving unrestricted native-code access. Extensions can add toolbar buttons, menus and windows, inspect and control supported LelSploit widgets, manipulate editors and tabs, react to events, manage extension-scoped data, make bounded public HTTP requests, change themes/settings, inspect Roblox state, drive supported LelSploit actions and opt into native window resizing.</p>
+<p class="good"><b>Design goal:</b> extensions should be able to build almost any LelSploit feature while remaining constrained to documented capabilities. The API deliberately does not expose arbitrary Python execution, shell/process creation, DLL loading, registry access, unrestricted machine-wide files, credential harvesting, or private/LAN network access.</p>
 
-<h2>Package and manifest</h2>
+<h2>Package format</h2>
 <pre>my-extension.lext  (ZIP)
 ├─ manifest.json
 ├─ icon.png
 └─ assets/...</pre>
-<p><code>manifest.json</code> fields: <code>format</code> (must be 1), <code>id</code>, <code>name</code>, <code>version</code>, <code>description</code> (Markdown), <code>icon</code>, <code>permissions</code>, <code>startup</code>, <code>interval</code>, <code>actions</code>, <code>shortcuts</code>, <code>events</code>, <code>panels</code>, <code>toolbar</code>, and <code>watchers</code>. Enabled extensions start automatically. IDs use lowercase letters/numbers plus <code>._-</code>.</p>
-<p><b>Actions</b> contain an <code>id</code>, optional text <code>inputs</code>, and <code>steps</code>. Every ordinary step can include <code>when</code>. <b>Startup</b> is a step array. <b>Interval</b> is <code>{"ms":1000,"steps":[...]}</code>. <b>Shortcuts</b> map keys to action IDs.</p>
-
-
-<h2>Extension manager</h2>
-<ul>
-<li><b>Import Extension</b> installs a validated <code>.lext</code> ZIP package.</li>
-<li>Installed cards show the extension name, version, id, requested permissions and Markdown description, and can be enabled/disabled or removed without restarting LelSploit.</li>
-<li>The extension folder is watched for changes and the live runtime refreshes automatically.</li>
-<li>Built-in extension templates appear when their ids are not already installed and can be installed directly from the Extensions window.</li>
-</ul>
-
-<h2>Manifest lifecycle, hooks and limits</h2>
-<table><tr><th>Feature</th><th>Supported behavior</th></tr>
-<tr><td>Package</td><td><code>.lext</code> ZIP up to 32 MiB; <code>manifest.json</code> up to 256 KiB; package icon up to 2 MiB.</td></tr>
-<tr><td>Identity</td><td><code>format</code> must be 1. Ids use lowercase letters/numbers plus <code>._-</code> and are at most 80 characters.</td></tr>
-<tr><td>Actions</td><td>Up to 64 actions, up to 24 text inputs per action, and nested flow up to 8 levels.</td></tr>
-<tr><td>Startup</td><td><code>startup</code> is a step list run when an enabled package is activated.</td></tr>
-<tr><td>Interval</td><td><code>interval</code> uses <code>{"ms":1000,"steps":[...]}</code>; interval values are clamped from 250 ms to 3,600,000 ms.</td></tr>
-<tr><td>Shortcuts</td><td>Up to 32 key sequences targeting declared action ids.</td></tr>
-<tr><td>Events</td><td>Up to 32 hooks: <code>editor.changed</code>, <code>selection.changed</code>, <code>tab.changed</code>, <code>clipboard.changed</code>, <code>app.activated</code>, <code>app.deactivated</code>, <code>roblox.changed</code>. An event can run an action or inline steps.</td></tr>
-<tr><td>Panels</td><td>Up to 16 manifest panels with up to 80 controls each. Runtime <code>ui.view.open</code> accepts up to 160 controls.</td></tr>
-<tr><td>Toolbar</td><td>Up to 12 manifest buttons, plus runtime add/remove through <code>ui.toolbar.add</code> and <code>ui.toolbar.remove</code>.</td></tr>
-<tr><td>Watchers</td><td>Up to 32 widget watchers. Signals: <code>clicked</code>, <code>toggled</code>, <code>text_changed</code>, <code>value_changed</code>, <code>current_changed</code>, <code>selection_changed</code>.</td></tr>
-<tr><td>Data bounds</td><td>Extension text/file operations are bounded to 8 MiB where applicable; network responses are bounded to 2 MiB.</td></tr>
+<p><code>manifest.json</code> fields: <code>format</code> (1), <code>api</code> (optional minimum API revision; this build supports 3), <code>id</code>, <code>name</code>, <code>version</code>, <code>description</code>, <code>icon</code>, <code>permissions</code>, <code>startup</code>, <code>interval</code>, <code>actions</code>, <code>shortcuts</code>, <code>events</code>, <code>panels</code>, <code>toolbar</code> and <code>watchers</code>. Enabled extensions activate automatically.</p>
+<table><tr><th>Limit</th><th>Value</th></tr>
+<tr><td>Package</td><td>10 MiB</td></tr>
+<tr><td>manifest.json</td><td>256 KiB</td></tr>
+<tr><td>Package icon</td><td>2 MiB</td></tr>
+<tr><td>Actions</td><td>64</td></tr>
+<tr><td>Shortcuts</td><td>32</td></tr>
+<tr><td>Events</td><td>32</td></tr>
+<tr><td>Panels</td><td>16</td></tr>
+<tr><td>Toolbar buttons</td><td>12 manifest buttons plus runtime buttons</td></tr>
+<tr><td>Flow nesting</td><td>8 levels</td></tr>
 </table>
-
-<h2>Variables / interpolation</h2>
-<p>Strings use <code>${name}</code>. Common values: <code>${editor}</code>, <code>${selection}</code>, <code>${tab_name}</code>, <code>${clipboard}</code>, <code>${input.id}</code>, <code>${ui.controlId}</code>, <code>${var.name}</code>, <code>${storage.key}</code>, <code>${event.name}</code>, <code>${event.value}</code>, <code>${extension.id}</code>, <code>${extension.name}</code>, <code>${app.roblox_running}</code>, <code>${app.roblox_mode}</code>, <code>${app.attached}</code>, <code>${app.proxy_active}</code>, <code>${app.tab_count}</code>, <code>${app.current_tab}</code>, <code>${roblox.place_id}</code>, <code>${roblox.job_id}</code>, <code>${proxy.active}</code>, and <code>${proxy.suspended}</code>.</p>
 
 <h2>Permissions</h2>
-<table><tr><th>Permission</th><th>Access</th></tr>
-<tr><td><code>editor</code></td><td>Editor text, selection, cursor and tabs.</td></tr>
-<tr><td><code>clipboard</code></td><td>Clipboard reads/writes.</td></tr>
-<tr><td><code>storage</code></td><td>Persistent extension-scoped key/value storage.</td></tr>
-<tr><td><code>files</code></td><td>Read/write/delete only inside <code>extension_data/&lt;extension-id&gt;</code>.</td></tr>
-<tr><td><code>app_files</code></td><td>Read/list/stat files under the LelSploit directory; no writes.</td></tr>
-<tr><td><code>picker</code></td><td>User-approved external file open/save dialogs.</td></tr>
-<tr><td><code>network</code></td><td>Bounded HTTP(S) to public addresses; local/private IPs are blocked.</td></tr>
-<tr><td><code>ui</code></td><td>Panels, toolbar buttons, dialogs, notifications, widget inspection/control.</td></tr>
-<tr><td><code>settings</code></td><td>LelSploit JSON settings tree.</td></tr>
-<tr><td><code>theme</code></td><td>Visual Wizard theme values/presets.</td></tr>
-<tr><td><code>execute</code></td><td>Execute source through LelSploit.</td></tr>
-<tr><td><code>roblox</code></td><td>Roblox session/join/server metadata and Attach/Detach actions.</td></tr>
-<tr><td><code>proxy</code></td><td>Proxy state and enable/disable/restart controls.</td></tr>
-<tr><td><code>fastflags</code></td><td>Custom FastFlag management.</td></tr>
-<tr><td><code>extensions</code></td><td>List, enable/disable, reload or remove installed extensions.</td></tr>
-<tr><td><code>sound</code></td><td>Beep and WAV playback from package/extension-data resources.</td></tr></table>
-
-<h2>Complete operation reference</h2>
-<h3>Editor and tabs (<code>editor</code>)</h3>
-<p><code>editor.set</code> text; <code>editor.append</code> text; <code>editor.prepend</code> text; <code>editor.insert</code> text at cursor; <code>editor.clear</code>; <code>editor.replace</code> find/replace with optional regex/count; <code>editor.select_all</code>; <code>editor.goto_line</code> line/index; <code>editor.cursor</code> → <code>var.&lt;save_as&gt;.line/index</code>; <code>editor.line</code> line → value; <code>selection.replace</code>, <code>selection.copy</code>, <code>selection.delete</code>; <code>editor.new_tab</code> name/text; <code>tabs.rename</code>, <code>tabs.select</code>, <code>tabs.close_current</code>, <code>tabs.list</code>, <code>tabs.read</code>, <code>tabs.set</code>.</p>
-<h3>Clipboard and dialogs</h3>
-<p><code>console.log</code> is retained for older extensions; the visible LelSploit console has been removed. <code>clipboard.set</code>, <code>clipboard.append</code>; <code>notify</code> title/text/duration; <code>message</code>; <code>dialog.input</code> → value + <code>.accepted</code>; <code>dialog.confirm</code> → boolean.</p>
-<h3>UI</h3>
-<p><code>ui.open</code> opens ScriptBlox/Tools/FastFlags/Extensions/Documentation/Settings. <code>ui.window</code> controls the main window. <code>ui.smooth_scroll</code> tunes smooth scrolling. <code>visual_wizard.enable</code> claims the Visual Wizard button. <code>ui.panel.open/close/update</code> controls manifest panels. <code>ui.view.open</code> can build an entire runtime window from one declarative JSON view object, so extensions normally do not need low-level widget operations. <code>ui.toolbar.add/remove</code> adds extension toolbar buttons. <code>ui.widget.get/set/invoke</code> works with object names or <code>attr:owner_attribute</code>. <code>ui.widget.list</code> returns up to 1000 discoverable widgets as JSON. <code>ui.icon.list</code> lists every PNG icon exposed read-only from LelSploit's <code>icons</code> directory.</p>
-<p>Panel/view controls: <code>label</code>, <code>heading</code>, <code>markdown</code>, <code>input</code>, <code>textarea</code>, <code>checkbox</code>/<code>switch</code>, <code>combo</code>, <code>list</code>, <code>slider</code>, <code>color</code>, <code>button</code>, <code>icon_button</code>, <code>icon</code>, <code>card</code>/<code>section</code>, <code>row</code>, <code>separator</code>, and <code>spacer</code>. Cards/rows can contain nested <code>controls</code>. Set <code>on_change</code> on inputs, switches, combos, lists, or sliders to dispatch an action automatically. Control values become <code>${ui.id}</code>.</p><p><b>Icons:</b> use <code>host:save</code>, <code>icons:save</code>, or <code>icons/save.png</code> in toolbar/control <code>icon</code> fields to use LelSploit's built-in icon library. A plain name first checks the extension package and then the host icon library. Package resources can be forced with <code>package:my-icon.png</code>.</p>
-
-<h3>Declarative UI controls</h3>
-<p>Manifest panels and runtime views can compose <code>label</code>, <code>heading</code>, <code>markdown</code>, <code>input</code>, <code>textarea</code>, <code>checkbox</code>, <code>switch</code>, <code>combo</code>, <code>list</code>, <code>slider</code>, <code>color</code>, <code>button</code>, <code>icon_button</code>, <code>icon</code>, <code>card</code>, <code>section</code>, <code>row</code>, <code>separator</code> and <code>spacer</code>. Cards, sections and rows can nest controls. Inputs, switches, combos, lists and sliders can use <code>on_change</code> to dispatch actions. Values are exposed as <code>${ui.id}</code>.</p>
-<p><b>Widget addressing:</b> <code>ui.widget.get/set/invoke</code> accepts an object name or <code>attr:owner_attribute</code>. <code>ui.widget.list</code> can enumerate up to 1000 discoverable widgets. <b>Icons:</b> use <code>host:name</code>, <code>icons:name</code>, <code>icons/name.png</code>, a plain package/host name, or <code>package:path.png</code>.</p>
-
-<h3>Storage and files</h3>
-<p><code>storage.set/delete/clear</code>. Writable sandbox: <code>file.read/write/append/delete/list</code> only inside <code>extension_data/&lt;id&gt;</code>. User-approved external files: <code>file.pick_read</code>, <code>file.pick_write</code>. Package resources: <code>package.list/read</code>. Read-only LelSploit tree: <code>app.file.list</code>, <code>app.file.read</code> (UTF-8/other encoding or base64), <code>app.file.stat</code>.</p>
-<h3>HTTP</h3>
-<p><code>http.request</code>: URL, method GET/POST/PUT/PATCH/DELETE, headers, body, timeout, save_as. It returns <code>var.name</code>, <code>var.name.status</code>, <code>var.name.url</code>, and <code>var.name.headers</code>. Public HTTP(S) only, 2 MiB response limit, redirect destinations rechecked.</p>
-<h3>Variables, text, JSON and flow</h3>
-<p><code>var.set</code>, <code>var.append</code>, <code>var.delete</code>, <code>var.number</code>; <code>system.now</code>; <code>system.info</code>; <code>text.transform</code> supports upper/lower/strip, JSON pretty/compact, URL/base64 encode/decode, SHA-256, reverse, length, line sort/unique/trim, newline normalization, word count, regex extract/replace. <code>json.get</code>, <code>json.set</code>. <code>flow.if</code>, <code>flow.repeat</code>, <code>flow.foreach</code>. <code>action.run</code> calls another action. <code>timer.after</code>, <code>timer.every</code>, <code>timer.cancel</code> schedule actions without blocking the UI.</p>
-<h3>Advanced math</h3>
-<p><code>math.eval</code> safely evaluates numeric expressions with constants <code>pi/e/tau</code>, arithmetic and a broad <code>math</code> function set (trig/hyperbolic, logs, gamma/erf, factorial, comb/perm, gcd/lcm, distance, fsum/prod and more). <code>math.stats</code> returns count/sum/min/max/mean/median, variance/deviation, quartiles and positive-value geometric/harmonic means. <code>math.vector</code> supports magnitude, normalize, dot, distance, add, subtract and 3D cross. <code>math.random</code> supports float/int/choice.</p>
-<h3>Roblox and execution</h3>
-<p><code>roblox.state</code> → JSON with running/mode/attached/proxy/place/job/process information plus strongly identified player pairs found in the current client log. <code>roblox.join_context</code> returns place/job/log join metadata. <code>roblox.players</code> returns player name/id pairs that are explicitly present in the client log and marks whether the snapshot is complete. <code>roblox.server</code> looks up public metadata for the current server (playing/max players/fps/ping when available). <code>roblox.client</code> returns the detected Roblox executable/version. <code>roblox.request</code> is a generic public HTTPS request primitive restricted to Roblox domains, so extensions can use new public Roblox REST endpoints without another LelSploit host change. <code>roblox.attach</code>, <code>roblox.reattach</code>, <code>roblox.detach</code>, and <code>roblox.execute</code> use LelSploit's normal Roblox action paths. <code>script.execute</code> remains as the compact execute operation.</p>
-<p class="note">Roblox intentionally does not expose a public API that maps every live server player token to username/user ID. LExt returns identities only when the client itself exposes a strong name/id pair in its local log; extensions can still execute Luau through <code>roblox.execute</code> for in-client logic.</p>
-<h3>Proxy and FastFlags</h3>
-<p><code>proxy.state</code>, <code>proxy.enable</code>, <code>proxy.disable</code>, <code>proxy.restart</code>. <code>fastflag.set</code> and <code>fastflag.remove</code>. Proxy controls use the same host logic as LelSploit, including custom-FastFlag snapshot/restore behavior.</p>
-<h3>Extensions</h3>
-<p><code>extension.list</code>, <code>extension.info</code>, <code>extension.set_enabled</code>, <code>extension.reload</code>, <code>extension.remove</code>. Changes trigger a live runtime refresh; a full LelSploit restart is not required.</p>
-<h3>Theme/settings/sound</h3>
-<p><code>settings.get/set</code>; <code>theme.get/set/preset/reset</code>; <code>sound.beep</code> frequency/duration; <code>sound.play</code> WAV from <code>package</code> or extension <code>data</code>; <code>sound.stop</code>.</p>
-
-<h2>Events and watchers</h2>
-<p>Events: <code>editor.changed</code>, <code>selection.changed</code>, <code>tab.changed</code>, <code>clipboard.changed</code>, <code>app.activated</code>, <code>app.deactivated</code>, <code>roblox.changed</code>. Event entries can reference an action or contain steps. Watchers connect actions to existing widget signals: <code>clicked</code>, <code>toggled</code>, <code>text_changed</code>, <code>value_changed</code>, <code>current_changed</code>, <code>selection_changed</code>.</p>
-
-
-<h2>Full operation inventory</h2>
-<p>This table mirrors every step operation accepted by this build. A permission of <b>None</b> means the operation itself does not need an extra manifest permission.</p>
-<table>
-<tr><th>Area</th><th>Operation</th><th>Permission</th></tr>
-<tr><td rowspan="14"><b>Data / flow</b></td><td><code>action.run</code></td><td>None</td></tr>
-<tr><td><code>flow.foreach</code></td><td>None</td></tr>
-<tr><td><code>flow.if</code></td><td>None</td></tr>
-<tr><td><code>flow.repeat</code></td><td>None</td></tr>
-<tr><td><code>json.get</code></td><td>None</td></tr>
-<tr><td><code>json.set</code></td><td>None</td></tr>
-<tr><td><code>text.transform</code></td><td>None</td></tr>
-<tr><td><code>timer.after</code></td><td>None</td></tr>
-<tr><td><code>timer.cancel</code></td><td>None</td></tr>
-<tr><td><code>timer.every</code></td><td>None</td></tr>
-<tr><td><code>var.append</code></td><td>None</td></tr>
-<tr><td><code>var.delete</code></td><td>None</td></tr>
-<tr><td><code>var.number</code></td><td>None</td></tr>
-<tr><td><code>var.set</code></td><td>None</td></tr>
-<tr><td rowspan="3"><b>App files</b></td><td><code>app.file.list</code></td><td><code>app_files</code></td></tr>
-<tr><td><code>app.file.read</code></td><td><code>app_files</code></td></tr>
-<tr><td><code>app.file.stat</code></td><td><code>app_files</code></td></tr>
-<tr><td rowspan="1"><b>App state</b></td><td><code>app.state</code></td><td>None</td></tr>
-<tr><td rowspan="2"><b>Clipboard</b></td><td><code>clipboard.append</code></td><td><code>clipboard</code></td></tr>
-<tr><td><code>clipboard.set</code></td><td><code>clipboard</code></td></tr>
-<tr><td rowspan="5"><b>Messages / dialogs</b></td><td><code>console.log</code></td><td><code>ui</code></td></tr>
-<tr><td><code>dialog.confirm</code></td><td><code>ui</code></td></tr>
-<tr><td><code>dialog.input</code></td><td><code>ui</code></td></tr>
-<tr><td><code>message</code></td><td><code>ui</code></td></tr>
-<tr><td><code>notify</code></td><td><code>ui</code></td></tr>
-<tr><td rowspan="20"><b>Editor / tabs</b></td><td><code>editor.append</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.clear</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.cursor</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.goto_line</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.insert</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.line</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.new_tab</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.prepend</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.replace</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.select_all</code></td><td><code>editor</code></td></tr>
-<tr><td><code>editor.set</code></td><td><code>editor</code></td></tr>
-<tr><td><code>selection.copy</code></td><td><code>editor</code></td></tr>
-<tr><td><code>selection.delete</code></td><td><code>editor</code></td></tr>
-<tr><td><code>selection.replace</code></td><td><code>editor</code></td></tr>
-<tr><td><code>tabs.close_current</code></td><td><code>editor</code></td></tr>
-<tr><td><code>tabs.list</code></td><td><code>editor</code></td></tr>
-<tr><td><code>tabs.read</code></td><td><code>editor</code></td></tr>
-<tr><td><code>tabs.rename</code></td><td><code>editor</code></td></tr>
-<tr><td><code>tabs.select</code></td><td><code>editor</code></td></tr>
-<tr><td><code>tabs.set</code></td><td><code>editor</code></td></tr>
-<tr><td rowspan="5"><b>Extension management</b></td><td><code>extension.info</code></td><td><code>extensions</code></td></tr>
-<tr><td><code>extension.list</code></td><td><code>extensions</code></td></tr>
-<tr><td><code>extension.reload</code></td><td><code>extensions</code></td></tr>
-<tr><td><code>extension.remove</code></td><td><code>extensions</code></td></tr>
-<tr><td><code>extension.set_enabled</code></td><td><code>extensions</code></td></tr>
-<tr><td rowspan="2"><b>FastFlags</b></td><td><code>fastflag.remove</code></td><td><code>fastflags</code></td></tr>
-<tr><td><code>fastflag.set</code></td><td><code>fastflags</code></td></tr>
-<tr><td rowspan="7"><b>Extension files / pickers</b></td><td><code>file.append</code></td><td><code>files</code></td></tr>
-<tr><td><code>file.delete</code></td><td><code>files</code></td></tr>
-<tr><td><code>file.list</code></td><td><code>files</code></td></tr>
-<tr><td><code>file.pick_read</code></td><td><code>picker</code></td></tr>
-<tr><td><code>file.pick_write</code></td><td><code>picker</code></td></tr>
-<tr><td><code>file.read</code></td><td><code>files</code></td></tr>
-<tr><td><code>file.write</code></td><td><code>files</code></td></tr>
-<tr><td rowspan="1"><b>Network</b></td><td><code>http.request</code></td><td><code>network</code></td></tr>
-<tr><td rowspan="6"><b>Math / system</b></td><td><code>math.eval</code></td><td>None</td></tr>
-<tr><td><code>math.random</code></td><td>None</td></tr>
-<tr><td><code>math.stats</code></td><td>None</td></tr>
-<tr><td><code>math.vector</code></td><td>None</td></tr>
-<tr><td><code>system.info</code></td><td>None</td></tr>
-<tr><td><code>system.now</code></td><td>None</td></tr>
-<tr><td rowspan="2"><b>Package resources</b></td><td><code>package.list</code></td><td>None</td></tr>
-<tr><td><code>package.read</code></td><td>None</td></tr>
-<tr><td rowspan="4"><b>Proxy</b></td><td><code>proxy.disable</code></td><td><code>proxy</code></td></tr>
-<tr><td><code>proxy.enable</code></td><td><code>proxy</code></td></tr>
-<tr><td><code>proxy.restart</code></td><td><code>proxy</code></td></tr>
-<tr><td><code>proxy.state</code></td><td><code>proxy</code></td></tr>
-<tr><td rowspan="11"><b>Roblox / execute</b></td><td><code>roblox.attach</code></td><td><code>roblox</code></td></tr>
-<tr><td><code>roblox.client</code></td><td><code>roblox</code></td></tr>
-<tr><td><code>roblox.detach</code></td><td><code>roblox</code></td></tr>
-<tr><td><code>roblox.execute</code></td><td><code>execute</code></td></tr>
-<tr><td><code>roblox.join_context</code></td><td><code>roblox</code></td></tr>
-<tr><td><code>roblox.players</code></td><td><code>roblox</code></td></tr>
-<tr><td><code>roblox.reattach</code></td><td><code>roblox</code></td></tr>
-<tr><td><code>roblox.request</code></td><td><code>roblox</code></td></tr>
-<tr><td><code>roblox.server</code></td><td><code>roblox</code></td></tr>
-<tr><td><code>roblox.state</code></td><td><code>roblox</code></td></tr>
-<tr><td><code>script.execute</code></td><td><code>execute</code></td></tr>
-<tr><td rowspan="6"><b>Settings / theme</b></td><td><code>settings.get</code></td><td><code>settings</code></td></tr>
-<tr><td><code>settings.set</code></td><td><code>settings</code></td></tr>
-<tr><td><code>theme.get</code></td><td><code>theme</code></td></tr>
-<tr><td><code>theme.preset</code></td><td><code>theme</code></td></tr>
-<tr><td><code>theme.reset</code></td><td><code>theme</code></td></tr>
-<tr><td><code>theme.set</code></td><td><code>theme</code></td></tr>
-<tr><td rowspan="3"><b>Sound</b></td><td><code>sound.beep</code></td><td><code>sound</code></td></tr>
-<tr><td><code>sound.play</code></td><td><code>sound</code></td></tr>
-<tr><td><code>sound.stop</code></td><td><code>sound</code></td></tr>
-<tr><td rowspan="3"><b>Storage</b></td><td><code>storage.clear</code></td><td><code>storage</code></td></tr>
-<tr><td><code>storage.delete</code></td><td><code>storage</code></td></tr>
-<tr><td><code>storage.set</code></td><td><code>storage</code></td></tr>
-<tr><td rowspan="15"><b>UI</b></td><td><code>ui.icon.list</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.open</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.panel.close</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.panel.open</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.panel.update</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.smooth_scroll</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.toolbar.add</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.toolbar.remove</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.view.open</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.widget.get</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.widget.invoke</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.widget.list</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.widget.set</code></td><td><code>ui</code></td></tr>
-<tr><td><code>ui.window</code></td><td><code>ui</code></td></tr>
-<tr><td><code>visual_wizard.enable</code></td><td><code>ui</code></td></tr>
+<table><tr><th>Permission</th><th>Capability</th></tr>
+<tr><td><code>editor</code></td><td>Read/change the active editor, selection and tabs.</td></tr>
+<tr><td><code>clipboard</code></td><td>Read/write/clear clipboard text.</td></tr>
+<tr><td><code>storage</code></td><td>Persistent extension-scoped key/value data.</td></tr>
+<tr><td><code>files</code></td><td>Read/write/copy/move/delete only inside the extension's own data directory.</td></tr>
+<tr><td><code>picker</code></td><td>User-approved open/save/folder dialogs. External files are only touched because the user chose them.</td></tr>
+<tr><td><code>app_files</code></td><td>Read/list/stat the LelSploit application tree. Read-only.</td></tr>
+<tr><td><code>network</code></td><td>Public HTTP/HTTPS only. Localhost, private, reserved and link-local destinations are blocked.</td></tr>
+<tr><td><code>ui</code></td><td>Windows, menus, panels, runtime views, toolbar buttons, dialogs, notifications and supported widget control.</td></tr>
+<tr><td><code>settings</code></td><td>LelSploit settings values.</td></tr>
+<tr><td><code>theme</code></td><td>Visual Wizard values and presets.</td></tr>
+<tr><td><code>execute</code></td><td>Execute Luau through LelSploit's configured execution bridge.</td></tr>
+<tr><td><code>roblox</code></td><td>Supported Roblox session metadata and Attach/Reattach/Detach controls.</td></tr>
+<tr><td><code>proxy</code></td><td>LelSploit proxy state and controls.</td></tr>
+<tr><td><code>fastflags</code></td><td>Supported FastFlag management.</td></tr>
+<tr><td><code>extensions</code></td><td>Inspect/manage installed LExt packages.</td></tr>
+<tr><td><code>sound</code></td><td>Beep/WAV playback.</td></tr>
 </table>
 
+<h2>Actions, variables and flow</h2>
+<p>Every action contains an <code>id</code> and <code>steps</code>. Steps may include <code>when</code>. Strings interpolate <code>${...}</code>.</p>
+<p>Common values include <code>${editor}</code>, <code>${selection}</code>, <code>${tab_name}</code>, <code>${clipboard}</code>, <code>${input.id}</code>, <code>${ui.controlId}</code>, <code>${var.name}</code>, <code>${storage.key}</code>, <code>${event.name}</code>, <code>${extension.id}</code>, <code>${extension.name}</code>, <code>${app.roblox_running}</code>, <code>${app.attached}</code>, <code>${app.tab_count}</code>, <code>${app.current_tab}</code>, <code>${roblox.place_id}</code> and <code>${roblox.job_id}</code>.</p>
+<p>Control flow: <code>flow.if</code>, <code>flow.repeat</code>, <code>flow.foreach</code>, <code>action.run</code>, <code>timer.after</code>, <code>timer.every</code>, <code>timer.cancel</code>.</p>
 
-<h2>Example</h2>
+<h2>Window API</h2>
+<p><code>ui.window</code> now supports native application-window control. This is also the capability used by the Resizable LelSploit extension.</p>
+<table><tr><th>action</th><th>Fields / behavior</th></tr>
+<tr><td><code>show</code>, <code>hide</code>, <code>raise</code></td><td>Visibility and activation.</td></tr>
+<tr><td><code>minimize</code>, <code>maximize</code>, <code>normal</code>, <code>restore</code></td><td>Standard window states.</td></tr>
+<tr><td><code>fullscreen</code>, <code>toggle_fullscreen</code></td><td>True fullscreen mode; toggle restores the previous maximized/normal state.</td></tr>
+<tr><td><code>enable_resize</code></td><td>Adjusts the Windows-style edge/corner resize claim. Native edge/corner resizing is enabled by default on all normal LelSploit windows. Optional <code>border</code> is 4–16 pixels.</td></tr>
+<tr><td><code>disable_resize</code>, <code>toggle_resize</code></td><td>Releases or toggles this extension's native resize claim.</td></tr>
+<tr><td><code>resize</code></td><td><code>width</code>, <code>height</code>.</td></tr>
+<tr><td><code>move</code></td><td><code>x</code>, <code>y</code>.</td></tr>
+<tr><td><code>center</code></td><td>Centers on the current screen's available work area.</td></tr>
+<tr><td><code>opacity</code></td><td><code>value</code> from 0.25 to 1.0.</td></tr>
+<tr><td><code>always_on_top</code></td><td><code>enabled</code> true/false.</td></tr>
+</table>
+<p><code>ui.window.state</code> writes JSON to <code>${var.&lt;save_as&gt;}</code> and individual values such as <code>${var.window.width}</code>, <code>${var.window.height}</code>, <code>${var.window.fullscreen}</code>, <code>${var.window.maximized}</code> and <code>${var.window.resizable}</code>.</p>
+<pre>{"op":"ui.window","action":"toggle_fullscreen","target":"current"}
+{"op":"ui.window","action":"toggle_fullscreen"}
+{"op":"ui.window.state","save_as":"window"}</pre>
+
+<h2>UI construction</h2>
+<p>Extensions can expose permanent toolbar buttons with <code>toolbar</code>, add/remove them at runtime with <code>ui.toolbar.add/remove</code>, add/remove icon buttons in LelSploit's title bar with <code>ui.titlebar.add/remove</code>, open manifest panels with <code>ui.panel.open/close/update</code>, build runtime windows with <code>ui.view.open</code>, and show action menus with <code>ui.menu.open</code>.</p>
+<p>Declarative controls: <code>label</code>, <code>heading</code>, <code>markdown</code>, <code>input</code>, <code>textarea</code>, <code>checkbox</code>, <code>switch</code>, <code>combo</code>, <code>list</code>, <code>slider</code>, <code>color</code>, <code>button</code>, <code>icon_button</code>, <code>icon</code>, <code>card</code>, <code>section</code>, <code>row</code>, <code>separator</code>, <code>spacer</code>. Cards/sections/rows can recursively contain <code>controls</code>. Inputs can use <code>on_change</code>.</p>
+<p><code>ui.widget.list</code> discovers widgets. <code>ui.widget.get/set/invoke</code> works with object names or <code>attr:owner_attribute</code>. Supported properties include text/title/tooltip/visible/enabled/checked/value/current index/current text/placeholder/style, width/height/x/y/geometry, min/max sizes, read-only state and window opacity. Widget invoke supports click/focus/show/hide/raise/clear/toggle.</p>
+<p><code>ui.icon.list</code> lists host icons. Use <code>host:name</code>, <code>icons:name</code>, <code>icons/name.png</code> or <code>package:path.png</code>.</p>
+
+<h3>Native title-bar buttons</h3>
+<p><code>ui.titlebar.add</code> inserts a 30×28 extension-owned icon button into LelSploit custom title bars. The default <code>target</code> is <code>main</code>; use <code>all</code> to add it to every current and future LelSploit window, or <code>active</code> for the active window. The default <code>position</code> is <code>after_minimize</code>, placing it between Minimize and Close. Other positions are <code>before_minimize</code>, <code>before_close</code>, and <code>after_pin</code>. <code>ui.titlebar.remove</code> removes every instance of that button id. Package and host icons are supported.</p>
+<pre>{"op":"ui.titlebar.add","id":"fullscreen","action":"toggle_fullscreen","tooltip":"Fullscreen","icon":"package:fullscreen.png","position":"after_minimize","target":"all"}</pre>
+
+<h2>Menus and dialogs</h2>
+<p><code>ui.menu.open</code> accepts up to 50 entries with <code>text</code> + <code>action</code>, optional <code>enabled</code>/<code>checked</code>, and separator entries.</p>
+<p>Dialogs: <code>dialog.input</code>, <code>dialog.multiline</code>, <code>dialog.choice</code>, <code>dialog.color</code>, <code>dialog.confirm</code>, <code>message</code>, <code>notify</code>. Dialog result variables include <code>.accepted</code> where applicable.</p>
+
+<h2>Editor and tabs</h2>
+<p>Editor operations: <code>editor.set</code>, <code>append</code>, <code>prepend</code>, <code>insert</code>, <code>clear</code>, <code>replace</code>, <code>select_all</code>, <code>goto_line</code>, <code>cursor</code>, <code>line</code>, <code>undo</code>, <code>redo</code>, <code>cut</code>, <code>copy</code>, <code>paste</code>, <code>duplicate_line</code>, <code>delete_line</code>. Selection operations: <code>selection.info</code>, <code>selection.replace</code>, <code>selection.copy</code>, <code>selection.delete</code>.</p>
+<p>Tabs: <code>editor.new_tab</code>, <code>tabs.rename</code>, <code>tabs.select</code>, <code>tabs.close_current</code>, <code>tabs.list</code>, <code>tabs.read</code>, <code>tabs.set</code>.</p>
+
+<h2>Clipboard</h2>
+<p><code>clipboard.get</code>, <code>clipboard.set</code>, <code>clipboard.append</code>, <code>clipboard.clear</code>.</p>
+
+<h2>Extension storage and files</h2>
+<p><code>storage.set/delete/clear</code> is persistent extension-scoped key/value storage.</p>
+<p>Sandbox files under <code>extension_data/&lt;extension-id&gt;</code>: <code>file.read</code>, <code>file.write</code>, <code>file.append</code>, <code>file.read_bytes</code>/<code>write_bytes</code> (base64), <code>file.delete</code>, <code>file.list</code>, <code>file.exists</code>, <code>file.stat</code>, <code>file.mkdir</code>, <code>file.copy</code>, <code>file.move</code>.</p>
+<p>User-approved external I/O: <code>file.pick_read</code>, <code>file.pick_read_many</code>, <code>file.pick_write</code>, <code>file.pick_folder</code>. Package resources: <code>package.read</code>, <code>package.list</code>. LelSploit tree: <code>app.file.read/list/stat</code> is read-only.</p>
+
+<h2>Network</h2>
+<p><code>http.request</code> supports GET/POST/PUT/PATCH/DELETE, headers/body, redirects and status/headers output. Responses are bounded to 2 MiB. <code>http.download</code> downloads a public HTTP(S) resource up to 10 MiB directly into the extension's sandbox. Localhost/private/reserved/link-local destinations remain blocked, including redirects.</p>
+
+<h2>Data, math and system helpers</h2>
+<p><code>var.set/append/delete/number</code>, <code>json.get/set</code>, <code>text.transform</code>, <code>math.eval</code>, <code>math.stats</code>, <code>math.vector</code>, <code>math.random</code>, <code>system.now</code>, <code>system.uuid</code>, <code>system.info</code>.</p>
+<p><code>text.transform</code> includes case/trim, JSON pretty/compact, URL/base64 encode/decode, SHA-256, reverse/length, line sort/unique/trim, newline normalization, word count and regex extract/replace.</p>
+
+<h2>LelSploit integration</h2>
+<p><code>ui.open</code> opens ScriptBlox, Tools, FastFlags, Extensions, Documentation or Settings. <code>settings.get/set</code> works with the LelSploit settings tree. <code>theme.get/set/preset/reset</code> controls Visual Wizard. <code>visual_wizard.enable</code> exposes the Visual Wizard button. <code>ui.smooth_scroll</code> lets extensions tune the global scrolling service.</p>
+<p>Extension management: <code>extension.list</code>, <code>extension.info</code>, <code>extension.set_enabled</code>, <code>extension.reload</code>, <code>extension.remove</code>.</p>
+
+<h2>Roblox, execute, proxy and FastFlags</h2>
+<p>Roblox: <code>roblox.state</code>, <code>roblox.join_context</code>, <code>roblox.players</code>, <code>roblox.server</code>, <code>roblox.client</code>, <code>roblox.request</code>, <code>roblox.attach</code>, <code>roblox.reattach</code>, <code>roblox.detach</code>. Execution: <code>script.execute</code> and <code>roblox.execute</code>. Proxy: <code>proxy.state/enable/disable/restart</code>. FastFlags: <code>fastflag.set/remove</code>.</p>
+
+<h2>Events and watchers</h2>
+<p>Manifest events: <code>editor.changed</code>, <code>selection.changed</code>, <code>tab.changed</code>, <code>clipboard.changed</code>, <code>app.activated</code>, <code>app.deactivated</code>, <code>roblox.changed</code>, <code>window.resized</code>, <code>window.moved</code>, <code>window.state_changed</code>. Use <code>ui.window.state</code> from a window event when exact geometry/state is needed.</p>
+<p>Widget watcher signals: <code>clicked</code>, <code>toggled</code>, <code>text_changed</code>, <code>value_changed</code>, <code>current_changed</code>, <code>selection_changed</code>.</p>
+
+<h2>Resizable LelSploit example</h2>
 <pre>{
   "format": 1,
-  "id": "example.sessiontool",
-  "name": "Session Tool",
-  "permissions": ["ui","roblox","proxy"],
+  "api": 2,
+  "id": "lelsploit.resizable",
+  "name": "Resizable LelSploit",
+  "version": "1.0.0",
+  "permissions": ["ui"],
+  "startup": [
+    {"op":"ui.window","action":"enable_resize"}
+  ],
   "actions": [
-    {"id":"open","steps":[{"op":"ui.panel.open","id":"main"}]},
-    {"id":"refresh","steps":[
-      {"op":"roblox.state","save_as":"rbx"},
-      {"op":"ui.panel.update","id":"main","control":"state","property":"text","value":"```json\\n${var.rbx}\\n```"}
+    {"id":"fullscreen","steps":[
+      {"op":"ui.window","action":"toggle_fullscreen"}
     ]}
   ],
-  "panels": [{"id":"main","title":"Session Tool","controls":[
-    {"type":"markdown","id":"state","text":"Press Refresh"},
-    {"type":"button","text":"Refresh","action":"refresh"}
-  ]}],
-  "toolbar": [{"id":"open","tooltip":"Session Tool","icon":"icon.png","action":"open"}]
+  "toolbar": [
+    {"id":"fullscreen","text":"Fullscreen","action":"fullscreen"}
+  ],
+  "shortcuts": [
+    {"keys":"F11","action":"fullscreen"}
+  ]
 }</pre>
 
-<h2>Limits / safety boundary</h2>
-<p>LExt is deliberately powerful inside LelSploit, but packages still do not receive arbitrary Python execution, DLL loading, raw process creation, registry writes, unrestricted machine-wide writes, or private-network access. Read-only app-file access is rooted to LelSploit; writable files stay inside the extension's own data directory unless the user explicitly chooses a path through a picker. This keeps the API broad without turning a downloaded theme/tool into unrestricted native code.</p>
-"""
+<h2>Security boundary</h2>
+<p>LExt is intentionally powerful <b>inside LelSploit</b>. It does not provide arbitrary Python/native execution, shell or process launch, DLL loading, registry access, unrestricted writes outside the extension sandbox, silent access to arbitrary user files, browser/cookie/password extraction, private-network probing, or bypasses around user file pickers. Public network access is URL/address checked, package/data sizes are bounded, and external file writes require the user to choose the destination.</p>
+<p>This boundary is deliberate: future extension capabilities should be added as narrow documented operations with permissions rather than exposing a generic native-code escape hatch.</p>
 
+"""
 DOCUMENTATION_HTML = r"""
 <style>
 body { color: #d4d4d4; font-family: 'Segoe UI'; font-size: 10.5pt; line-height: 1.55; background: #0b0c0d; margin: 0; }
@@ -10722,19 +9129,7 @@ class SettingsWindow(QDialog):
         self.owner.log("LelSploit data erased.", "success")
 
 
-class FastFlagCheckButton(QPushButton):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("fastFlagCheck")
-        self.setCheckable(True)
-        self.setFixedSize(22, 22)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setAccessibleName("Toggle")
-        self.toggled.connect(self._sync_mark)
-        self._sync_mark(False)
-
-    def _sync_mark(self, checked):
-        self.setText("✓" if checked else "")
+FastFlagCheckButton = _lelsploit_fastflags.FastFlagCheckButton
 
 
 class BrightCheckBox(QWidget):
@@ -11023,1142 +9418,9 @@ class JsonSyntaxHighlighter(QSyntaxHighlighter):
                 self.setFormat(start + match.start(), match.end() - match.start(), self.escape_format)
 
 
-class FastFlagsWindow(QDialog):
-    MSAA_ITEMS = (("Default", None), ("1x", "1"), ("2x", "2"), ("4x", "4"))
-    TEXTURE_ITEMS = (("Default", None), ("Level 0", "0"), ("Level 1", "1"), ("Level 2", "2"), ("Level 3", "3"))
-    RENDER_ITEMS = (("Default", None), ("D3D11", "D3D11"), ("Vulkan", "Vulkan"), ("OpenGL", "OpenGL"))
-
-    def __init__(self, parent):
-        super().__init__(parent)
-        self.owner = parent
-        self.current_flags = {}
-        self._baseline_flags = {}
-        self._baseline_enabled = False
-        self._baseline_fps = 0
-        self._baseline_custom_flags = {}
-        self._baseline_username_settings = {}
-        self._reloading = False
-        self.asset_rows = []
-        self.auto_save_timer = QTimer(self)
-        self.auto_save_timer.setSingleShot(True)
-        self.auto_save_timer.setInterval(260)
-        self.auto_save_timer.timeout.connect(lambda: self.save_changes(quiet=True))
-        self.username_save_timer = QTimer(self)
-        self.username_save_timer.setSingleShot(True)
-        self.username_save_timer.setInterval(220)
-        self.username_save_timer.timeout.connect(self.persist_username_spoofer)
-        self.setObjectName("fastFlagsWindow")
-        self.setWindowTitle("FastFlags")
-        self.resize(980, 700)
-        self.setMinimumSize(780, 540)
-        apply_window_icon(self)
-        outer = blur_content_layout(self, self, "FastFlags", (14, 12, 14, 14), 9)
-
-        self.attached_banner = QFrame()
-        self.attached_banner.setObjectName("attachedWarning")
-        attached_row = QHBoxLayout(self.attached_banner)
-        attached_row.setContentsMargins(11, 8, 11, 8)
-        attached_row.setSpacing(8)
-        self.attached_label = QLabel("")
-        self.attached_label.setTextFormat(Qt.TextFormat.RichText)
-        self.attached_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        self.attached_label.setOpenExternalLinks(False)
-        self.attached_label.linkActivated.connect(self.owner.handle_fastflags_mode_link)
-        attached_row.addWidget(self.attached_label, 1)
-        outer.addWidget(self.attached_banner)
-
-        nav = QHBoxLayout()
-        nav.setSpacing(5)
-        self.nav_group = QButtonGroup(self)
-        self.nav_group.setExclusive(True)
-        self.nav_buttons = []
-        for index, label in enumerate(("FastFlags", "Custom Flags", "Assets", "Username", "Custom")):
-            button = QPushButton(label)
-            button.setObjectName("clientNav")
-            button.setCheckable(True)
-            button.setFixedHeight(31)
-            button.clicked.connect(lambda checked=False, i=index: self.stack.setCurrentIndex(i))
-            self.nav_group.addButton(button)
-            self.nav_buttons.append(button)
-            nav.addWidget(button)
-        nav.addStretch(1)
-        outer.addLayout(nav)
-
-        self.stack = QStackedWidget()
-        self.stack.setObjectName("clientStack")
-        self.stack.setAutoFillBackground(False)
-        self.stack.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.stack.addWidget(self.build_fastflag_page())
-        self.stack.addWidget(self.build_custom_fastflags_page())
-        self.stack.addWidget(self.build_assets_page())
-        self.stack.addWidget(self.build_username_page())
-        self.stack.addWidget(self.build_custom_page())
-        outer.addWidget(self.stack, 1)
-        self.nav_buttons[0].setChecked(True)
-
-        self.restart_bar = QFrame()
-        self.restart_bar.setObjectName("restartBar")
-        restart_layout = QHBoxLayout(self.restart_bar)
-        restart_layout.setContentsMargins(11, 7, 11, 7)
-        self.restart_label = QLabel('Restart Roblox to apply changes. <a href="restart" style="color:#9ec5ff;text-decoration:none;"><b>Restart now</b></a>')
-        self.restart_label.setTextFormat(Qt.TextFormat.RichText)
-        self.restart_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        self.restart_label.setOpenExternalLinks(False)
-        self.restart_label.linkActivated.connect(self.restart_now)
-        restart_layout.addWidget(self.restart_label)
-        restart_layout.addStretch(1)
-        outer.addWidget(self.restart_bar)
-
-        self.setStyleSheet(r'''
-            QDialog#fastFlagsWindow { background:#0b0c0d; color:#dedede; }
-            QWidget { color:#dedede; }
-            QLabel { background:transparent; }
-            QCheckBox { background:transparent; color:#f1f1f1; spacing:7px; }
-            QCheckBox::indicator { width:16px; height:16px; border:1px solid #696969; border-radius:3px; background:#090909; }
-            QCheckBox::indicator:hover { border-color:#a0a0a0; background:#121212; }
-            QCheckBox::indicator:checked { border-color:#8be3a5; background:#3c995d; }
-            QPushButton { background:#111111; color:#e7e7e7; border:1px solid #292929; border-radius:5px; padding:6px 10px; }
-            QPushButton:hover { background:#191919; border-color:#3a3a3a; }
-            QPushButton#clientNav { background:transparent; border:0; color:#999; padding:5px 12px; }
-            QPushButton#clientNav:hover { color:#eee; background:#101010; }
-            QPushButton#clientNav:checked { color:#fff; background:#171717; }
-            QStackedWidget#clientStack { border:0; background:transparent; }
-            QStackedWidget#clientStack > QWidget { border:0; background:transparent; }
-            QWidget#fastFlagsPage, QWidget#customFastFlagsPage, QWidget#assetsPage, QWidget#usernamePage, QWidget#customModsPage { background:transparent; border:0; }
-            QFrame#fastFlagCard, QFrame#modRow { background:#0b0b0b; border:1px solid #242424; border-radius:7px; }
-            QFrame#fastFlagManagerCard { background:#0d0d0d; border:1px solid #2b2b2b; border-radius:7px; }
-            QLabel#sectionTitle { color:#8e8e8e; font-size:11px; font-weight:600; padding:7px 2px 2px; }
-            QLabel#modStatus { color:#888; font-style:italic; }
-            QLabel#modStatus[applied="true"] { color:#7fce91; font-style:normal; }
-            QLineEdit, QSpinBox { background:#0d0d0e; color:#ececec; border:1px solid #2a2a2c; border-radius:6px; min-height:32px; padding:0 9px; }
-            QLineEdit:focus, QSpinBox:focus { border-color:#454548; background:#101012; }
-            QSlider { background:transparent; border:none; }
-            QSlider::groove:horizontal { height:4px; background:#2c2c2f; border:none; border-radius:2px; }
-            QSlider::sub-page:horizontal { background:#56565b; border-radius:2px; }
-            QSlider::add-page:horizontal { background:#242426; border-radius:2px; }
-            QSlider::handle:horizontal { width:12px; margin:-4px 0; background:#8a8a8f; border:1px solid #a0a0a4; border-radius:6px; }
-            QSlider::handle:horizontal:hover { background:#a8a8ad; border-color:#c0c0c4; }
-            QFrame#restartBar { background:#0c0c0d; border:1px solid #2a2a2c; border-radius:7px; }
-            QFrame#attachedWarning { background:#18130a; border:1px solid #55401b; border-radius:7px; }
-            QFrame#attachedWarning QLabel { color:#e8d7ad; background:transparent; }
-            QPlainTextEdit#customFlagEditor { background:#09090a; color:#e8e8e8; border:1px solid #28282b; border-radius:7px; padding:8px; selection-background-color:#303033; }
-            QPlainTextEdit#customFlagEditor[invalid="true"] { border-color:#8b3a3a; }
-            QLabel#customFlagStatus { color:#888; background:transparent; }
-            QTableWidget#customFlagTable { background:transparent; alternate-background-color:transparent; border:1px solid #252528; border-radius:7px; gridline-color:transparent; selection-background-color:#18191b; selection-color:#f0f0f0; }
-            QTableWidget#customFlagTable::item { padding:6px 7px; border-bottom:1px solid #151517; }
-            QHeaderView::section { background:#0d0d0f; color:#bcbcbc; border:0; border-bottom:1px solid #252528; padding:7px; font-weight:600; }
-            QPushButton#hotkeyButton { background:#101012; border:1px solid #2d2d31; border-radius:5px; padding:0 9px; color:#d6d6d6; }
-            QPushButton#hotkeyButton:hover { background:#171719; border-color:#45454a; color:#ffffff; }
-            QPushButton#hotkeyResetButton { background:transparent; border:1px solid transparent; border-radius:5px; padding:0; }
-            QPushButton#hotkeyResetButton:hover { background:#171719; border-color:#303034; }
-            QPushButton#hotkeyResetButton:disabled { background:transparent; border-color:transparent; }
-            QPushButton#fastFlagCheck { background:#080808; color:#fff; border:1px solid #444; border-radius:4px; padding:0; font-weight:700; }
-            QPushButton#fastFlagCheck:checked { background:#356846; border-color:#6da17d; }
-            QPushButton#flatButton, QPushButton#resetLink { background:transparent; border:0; color:#999; }
-            QPushButton#flatButton:hover, QPushButton#resetLink:hover { color:#eee; background:transparent; }
-            QScrollArea, QScrollArea > QWidget > QWidget { border:0; background:transparent; }
-            QScrollBar:vertical { width:9px; background:#070707; }
-            QScrollBar::handle:vertical { background:#333; border-radius:4px; min-height:25px; }
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
-        ''')
-        apply_blur_style(self)
-        self.reload()
-
-    @staticmethod
-    def row_card(label, control, prominent=False):
-        card = QFrame()
-        card.setObjectName("fastFlagManagerCard" if prominent else "fastFlagCard")
-        card.setMinimumHeight(48)
-        row = QHBoxLayout(card)
-        row.setContentsMargins(12, 8, 12, 8)
-        row.setSpacing(10)
-        text = QLabel(label)
-        if prominent:
-            text.setStyleSheet("color:#eee;font-weight:600;background:transparent;")
-        row.addWidget(text, 1)
-        row.addWidget(control, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        return card
-
-    def build_fastflag_page(self):
-        page = QWidget()
-        page.setObjectName("fastFlagsPage")
-        page.setAutoFillBackground(False)
-        page_layout = QVBoxLayout(page)
-        page_layout.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(1, 1, 1, 1)
-        layout.setSpacing(8)
-        self.manager_check = FastFlagCheckButton()
-        layout.addWidget(self.row_card("Allow LelSploit to manage FastFlags", self.manager_check, True))
-        self.managed_panel = QWidget()
-        managed = QVBoxLayout(self.managed_panel)
-        managed.setContentsMargins(0, 0, 0, 0)
-        managed.setSpacing(7)
-        title = QLabel("Rendering")
-        title.setObjectName("sectionTitle")
-        managed.addWidget(title)
-        self.render_combo = LelComboBox(); self.render_combo.setFixedWidth(190)
-        for label, value in self.RENDER_ITEMS: self.render_combo.addItem(label, value)
-        managed.addWidget(self.row_card("Rendering Mode", self.render_combo))
-        self.msaa_combo = LelComboBox(); self.msaa_combo.setFixedWidth(190)
-        for label, value in self.MSAA_ITEMS: self.msaa_combo.addItem(label, value)
-        managed.addWidget(self.row_card("MSAA Level", self.msaa_combo))
-        self.scaling_check = FastFlagCheckButton(); managed.addWidget(self.row_card("Fix Display Scaling", self.scaling_check))
-        self.fullscreen_check = FastFlagCheckButton(); managed.addWidget(self.row_card("Alt+Enter Fullscreen", self.fullscreen_check))
-        self.texture_combo = LelComboBox(); self.texture_combo.setFixedWidth(190)
-        for label, value in self.TEXTURE_ITEMS: self.texture_combo.addItem(label, value)
-        managed.addWidget(self.row_card("Texture Quality", self.texture_combo))
-
-        title = QLabel("Quality overrides"); title.setObjectName("sectionTitle"); managed.addWidget(title)
-        self.mesh_check = FastFlagCheckButton()
-        self.mesh_slider = JumpSlider(Qt.Orientation.Horizontal); self.mesh_slider.setRange(0, 4); self.mesh_slider.setFixedWidth(170)
-        self.mesh_value = QLabel("Default"); self.mesh_value.setFixedWidth(55)
-        mesh_ctl = QWidget(); mesh_ctl.setStyleSheet("background:transparent;border:none;"); mesh_row = QHBoxLayout(mesh_ctl); mesh_row.setContentsMargins(0,0,0,0); mesh_row.setSpacing(8)
-        mesh_row.addWidget(self.mesh_check); mesh_row.addWidget(self.mesh_slider); mesh_row.addWidget(self.mesh_value)
-        managed.addWidget(self.row_card("Mesh LOD Override", mesh_ctl))
-        self.frm_check = FastFlagCheckButton()
-        self.frm_slider = JumpSlider(Qt.Orientation.Horizontal); self.frm_slider.setRange(0, 21); self.frm_slider.setFixedWidth(170)
-        self.frm_value = QLabel("Default"); self.frm_value.setFixedWidth(62)
-        frm_ctl = QWidget(); frm_ctl.setStyleSheet("background:transparent;border:none;"); frm_row = QHBoxLayout(frm_ctl); frm_row.setContentsMargins(0,0,0,0); frm_row.setSpacing(8)
-        frm_row.addWidget(self.frm_check); frm_row.addWidget(self.frm_slider); frm_row.addWidget(self.frm_value)
-        managed.addWidget(self.row_card("FRM Quality Override", frm_ctl))
-        self.grey_sky_check = FastFlagCheckButton(); managed.addWidget(self.row_card("Grey Sky (Debug)", self.grey_sky_check))
-        self.pause_voxelizer_check = FastFlagCheckButton(); managed.addWidget(self.row_card("Pause Voxelizer", self.pause_voxelizer_check))
-
-        title = QLabel("Environment"); title.setObjectName("sectionTitle"); managed.addWidget(title)
-        self.grass_max = self._default_spin(0, 10000); managed.addWidget(self.row_card("Grass Distance Max", self.grass_max))
-        self.grass_min = self._default_spin(0, 10000); managed.addWidget(self.row_card("Grass Distance Min", self.grass_min))
-        self.grass_motion = self._default_spin(0, 10000); managed.addWidget(self.row_card("Grass Motion Factor", self.grass_motion))
-        self.fps_cap = QSpinBox(); self.fps_cap.setRange(0, 1000); self.fps_cap.setSpecialValueText("Default"); self.fps_cap.setFixedWidth(190)
-        managed.addWidget(self.row_card("Framerate Cap (FPS)", self.fps_cap))
-        self.reset_button = QPushButton("Reset configuration"); self.reset_button.setObjectName("resetLink"); self.reset_button.clicked.connect(self.reset_configuration)
-        managed.addWidget(self.reset_button, 0, Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(self.managed_panel)
-        layout.addStretch(1)
-        scroll.setWidget(content)
-        page_layout.addWidget(scroll, 1)
-        self.manager_check.toggled.connect(self.on_manager_toggled)
-        controls = [self.render_combo, self.msaa_combo, self.scaling_check, self.fullscreen_check, self.texture_combo,
-                    self.mesh_check, self.mesh_slider, self.frm_check, self.frm_slider, self.grey_sky_check,
-                    self.pause_voxelizer_check, self.grass_max, self.grass_min, self.grass_motion, self.fps_cap]
-        for control in controls:
-            signal = getattr(control, "toggled", None) or getattr(control, "valueChanged", None) or getattr(control, "currentIndexChanged", None)
-            if signal is not None:
-                signal.connect(self.update_change_state)
-        self.mesh_slider.valueChanged.connect(self._update_slider_labels)
-        self.frm_slider.valueChanged.connect(self._update_slider_labels)
-        return page
-
-    def build_custom_fastflags_page(self):
-        page = QWidget()
-        page.setObjectName("customFastFlagsPage")
-        page.setAutoFillBackground(False)
-        root = QVBoxLayout(page)
-        root.setContentsMargins(4, 4, 4, 4)
-        root.setSpacing(10)
-
-        header = QHBoxLayout()
-        title = QLabel("Custom FastFlags")
-        title.setStyleSheet("font-size:14px;font-weight:600;color:#f0f0f0;background:transparent;")
-        header.addWidget(title)
-        header.addStretch(1)
-        root.addLayout(header)
-
-        self.custom_flag_status = QLabel("")
-        self.custom_flag_status.setObjectName("customFlagStatus")
-        self.custom_flag_status.setStyleSheet("color:#e06c75;background:transparent;")
-        self.custom_flag_status.hide()
-        root.addWidget(self.custom_flag_status)
-
-        toolbar_top = QHBoxLayout()
-        toolbar_top.setSpacing(7)
-        self.custom_flag_search = QLineEdit()
-        self.custom_flag_search.setPlaceholderText("Search custom FastFlags…")
-        self.custom_flag_search.textChanged.connect(self._filter_custom_flag_rows)
-        self.fastflag_list_button = QPushButton("FastFlags List")
-        list_icon = app_icon("fflaglist")
-        if not list_icon.isNull():
-            self.fastflag_list_button.setIcon(list_icon)
-            self.fastflag_list_button.setIconSize(QSize(16, 16))
-        self.fastflag_list_button.clicked.connect(self.open_fastflag_list)
-        toolbar_top.addWidget(self.custom_flag_search, 1)
-        toolbar_top.addWidget(self.fastflag_list_button)
-        root.addLayout(toolbar_top)
-
-        toolbar_actions = QHBoxLayout()
-        toolbar_actions.setSpacing(7)
-        add_button = QPushButton("Add flag")
-        import_button = QPushButton("Import JSON")
-        export_button = QPushButton("Export JSON")
-        add_button.clicked.connect(self.add_custom_fastflag)
-        import_button.clicked.connect(self.import_custom_fastflags)
-        export_button.clicked.connect(self.export_custom_fastflags)
-        toolbar_actions.addWidget(add_button)
-        toolbar_actions.addStretch(1)
-        toolbar_actions.addWidget(import_button)
-        toolbar_actions.addWidget(export_button)
-        root.addLayout(toolbar_actions)
-
-        self.custom_flag_table = QTableWidget(0, 4)
-        self.custom_flag_table.setObjectName("customFlagTable")
-        self.custom_flag_table.setAutoFillBackground(False)
-        self.custom_flag_table.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.custom_flag_table.viewport().setAutoFillBackground(False)
-        self.custom_flag_table.viewport().setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.custom_flag_table.viewport().setStyleSheet("background:transparent;border:0;")
-        self.custom_flag_table.setHorizontalHeaderLabels(("Name", "Value", "Status", "Hotkey"))
-        self.custom_flag_table.verticalHeader().setVisible(False)
-        self.custom_flag_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.custom_flag_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.custom_flag_table.setAlternatingRowColors(False)
-        self.custom_flag_table.setShowGrid(False)
-        self.custom_flag_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.DoubleClicked
-            | QAbstractItemView.EditTrigger.SelectedClicked
-            | QAbstractItemView.EditTrigger.EditKeyPressed
-        )
-        self.custom_flag_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.custom_flag_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.custom_flag_table.customContextMenuRequested.connect(self._remove_custom_flag_at_position)
-        header_view = self.custom_flag_table.horizontalHeader()
-        header_view.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header_view.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        header_view.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        header_view.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        self.custom_flag_table.setColumnWidth(1, 170)
-        self.custom_flag_table.setColumnWidth(2, 76)
-        self.custom_flag_table.setColumnWidth(3, 310)
-        self.custom_flag_table.cellChanged.connect(self._custom_flag_table_changed)
-        self.custom_flag_table.cellClicked.connect(self._begin_custom_flag_edit)
-        self.custom_flag_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
-        self.custom_flag_table.verticalHeader().setMinimumSectionSize(54)
-        self.custom_flag_table.verticalHeader().setDefaultSectionSize(54)
-        root.addWidget(self.custom_flag_table, 1)
-
-        return page
-
-    def _parse_custom_fastflag_editor(self):
-        return normalize_fastflags(self.owner.load_custom_fastflags())
-
-    def _set_custom_flag_status(self, text="", invalid=False):
-        self.custom_flag_status.setText(text if invalid else "")
-        self.custom_flag_status.setVisible(bool(invalid and text))
-
-    def _custom_flags_from_table(self):
-        flags = {}
-        for row in range(self.custom_flag_table.rowCount()):
-            name_item = self.custom_flag_table.item(row, 0)
-            value_item = self.custom_flag_table.item(row, 1)
-            name = name_item.text().strip() if name_item else ""
-            if name:
-                flags[name] = value_item.text() if value_item else ""
-        return normalize_fastflags(flags)
-
-    def _sync_custom_json_from_saved(self, flags=None):
-        return
-
-    def _load_custom_flag_table(self):
-        if not hasattr(self, "custom_flag_table"):
-            return
-        flags = normalize_fastflags(self.owner.load_custom_fastflags())
-        state = self.owner.load_custom_fastflag_state()
-        disabled = set(state.get("disabled", []))
-        bindings = state.get("keybinds", {}) if isinstance(state.get("keybinds"), dict) else {}
-        self.custom_flag_table.blockSignals(True)
-        try:
-            self.custom_flag_table.clearContents()
-            self.custom_flag_table.setRowCount(len(flags))
-            self._custom_status_buttons = {}
-            self._custom_hotkey_buttons = {}
-            self._custom_hotkey_reset_buttons = {}
-            for row, (name, value) in enumerate(sorted(flags.items(), key=lambda item: item[0].casefold())):
-                name_item = QTableWidgetItem(name)
-                name_item.setData(Qt.ItemDataRole.UserRole, name)
-                name_item.setToolTip("Click to rename this FastFlag")
-                value_item = QTableWidgetItem(str(value))
-                value_item.setToolTip("Click to edit this value")
-                self.custom_flag_table.setItem(row, 0, name_item)
-                self.custom_flag_table.setItem(row, 1, value_item)
-
-                status_host = QWidget()
-                status_host.setStyleSheet("background:transparent;")
-                status_layout = QHBoxLayout(status_host)
-                status_layout.setContentsMargins(0, 0, 0, 0)
-                status_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                status_button = FastFlagCheckButton()
-                status_button.setChecked(name not in disabled)
-                status_button.setToolTip("Enabled" if name not in disabled else "Disabled")
-                status_button.toggled.connect(lambda checked, n=name: self._set_custom_flag_enabled(n, checked))
-                status_layout.addWidget(status_button)
-                self.custom_flag_table.setCellWidget(row, 2, status_host)
-                self._custom_status_buttons[name] = status_button
-
-                self.custom_flag_table.setRowHeight(row, 54)
-                hotkey_host = QWidget()
-                hotkey_host.setStyleSheet("background:transparent;")
-                hotkey_layout = QHBoxLayout(hotkey_host)
-                hotkey_layout.setContentsMargins(6, 8, 6, 8)
-                hotkey_layout.setSpacing(6)
-                hotkey_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-                hotkey_button = QPushButton(hotkey_text(bindings.get(name)))
-                hotkey_button.setMinimumWidth(225)
-                hotkey_button.setFixedHeight(30)
-                hotkey_button.setObjectName("hotkeyButton")
-                hotkey_button.setToolTip("Click to set a global hotkey")
-                hotkey_button.clicked.connect(lambda checked=False, n=name: self.edit_custom_fastflag_hotkey(n))
-                hotkey_layout.addWidget(hotkey_button, 1)
-                hotkey_reset = QPushButton()
-                hotkey_reset.setObjectName("hotkeyResetButton")
-                hotkey_reset.setToolTip("Clear hotkey")
-                hotkey_reset.setFixedSize(30, 30)
-                hotkey_reset.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                reset_icon = app_icon("reattach")
-                if not reset_icon.isNull():
-                    hotkey_reset.setIcon(reset_icon)
-                    hotkey_reset.setIconSize(QSize(13, 13))
-                hotkey_reset.setEnabled(name in bindings)
-                hotkey_reset.clicked.connect(lambda checked=False, n=name: self.clear_custom_fastflag_hotkey(n))
-                hotkey_layout.addWidget(hotkey_reset)
-                self.custom_flag_table.setCellWidget(row, 3, hotkey_host)
-                self._custom_hotkey_buttons[name] = hotkey_button
-                self._custom_hotkey_reset_buttons[name] = hotkey_reset
-        finally:
-            self.custom_flag_table.blockSignals(False)
-        self.custom_flag_table.horizontalScrollBar().setValue(0)
-        self._filter_custom_flag_rows(self.custom_flag_search.text() if hasattr(self, "custom_flag_search") else "")
-
-    def _filter_custom_flag_rows(self, text=""):
-        if not hasattr(self, "custom_flag_table"):
-            return
-        query = str(text or "").strip().casefold()
-        for row in range(self.custom_flag_table.rowCount()):
-            name_item = self.custom_flag_table.item(row, 0)
-            value_item = self.custom_flag_table.item(row, 1)
-            haystack = ((name_item.text() if name_item else "") + " " + (value_item.text() if value_item else "")).casefold()
-            self.custom_flag_table.setRowHidden(row, bool(query and query not in haystack))
-
-    def _persist_custom_flag_mapping(self, flags):
-        flags = normalize_fastflags(flags)
-        previous = normalize_fastflags(self.owner.load_custom_fastflags())
-        if flags == previous:
-            return False
-        proxy_was_needed = self.owner.proxy_features_needed()
-        self.owner.save_custom_fastflags(flags)
-        state = self.owner.save_custom_fastflag_state(self.owner.load_custom_fastflag_state())
-        self.owner.refresh_custom_fastflag_hotkeys()
-        self._baseline_custom_flags = dict(flags)
-        effective = self.owner.load_effective_fastflags()
-        prime_windows_fastflag_cache(effective)
-        self.owner.mark_custom_fastflags_changed()
-        if not self.owner.proxy_suspended_for_api():
-            self.owner.refresh_proxy_for_active_session()
-        proxy_is_needed = self.owner.proxy_features_needed()
-        if self.owner.roblox_running is True and (not self.owner.roblox_proxy_active or proxy_was_needed != proxy_is_needed):
-            self.owner.set_fastflags_restart_required(True)
-        self._sync_custom_json_from_saved(flags)
-        return True
-
-    def _begin_custom_flag_edit(self, row, column):
-        if column not in (0, 1) or self._reloading:
-            return
-        item = self.custom_flag_table.item(row, column)
-        if item is not None:
-            QTimer.singleShot(0, lambda i=item: self.custom_flag_table.editItem(i))
-
-    def _rename_custom_fastflag(self, old_name, new_name, value):
-        old_name = str(old_name or "").strip()
-        new_name = str(new_name or "").strip()
-        if not old_name or not new_name or old_name == new_name:
-            return False
-        flags = self.owner.load_custom_fastflags()
-        if new_name in flags and new_name != old_name:
-            return False
-        state = self.owner.load_custom_fastflag_state()
-        flags.pop(old_name, None)
-        flags[new_name] = value
-        disabled = set(state.get("disabled", []))
-        if old_name in disabled:
-            disabled.discard(old_name)
-            disabled.add(new_name)
-        bindings = dict(state.get("keybinds", {}))
-        binding = bindings.pop(old_name, None)
-        if binding is not None:
-            bindings[new_name] = binding
-        self.owner.save_custom_fastflags(flags)
-        self.owner.save_custom_fastflag_state({"disabled": sorted(disabled), "keybinds": bindings})
-        self.owner.refresh_custom_fastflag_hotkeys()
-        self._baseline_custom_flags = normalize_fastflags(flags)
-        prime_windows_fastflag_cache(self.owner.load_effective_fastflags())
-        self.owner.mark_custom_fastflags_changed()
-        if not self.owner.proxy_suspended_for_api():
-            self.owner.refresh_proxy_for_active_session()
-        if self.owner.roblox_running is True and not self.owner.roblox_proxy_active:
-            self.owner.set_fastflags_restart_required(True)
-        self._sync_custom_json_from_saved(flags)
-        return True
-
-    def _custom_flag_table_changed(self, row, column):
-        if self._reloading or column not in (0, 1):
-            return
-        name_item = self.custom_flag_table.item(row, 0)
-        value_item = self.custom_flag_table.item(row, 1)
-        if name_item is None:
-            return
-        current_name = name_item.text().strip()
-        original_name = str(name_item.data(Qt.ItemDataRole.UserRole) or current_name).strip()
-        value = value_item.text() if value_item is not None else ""
-        if column == 0:
-            if not current_name:
-                self.custom_flag_table.blockSignals(True)
-                try:
-                    name_item.setText(original_name)
-                finally:
-                    self.custom_flag_table.blockSignals(False)
-                return
-            if current_name != original_name:
-                if current_name in self.owner.load_custom_fastflags():
-                    self.custom_flag_table.blockSignals(True)
-                    try:
-                        name_item.setText(original_name)
-                    finally:
-                        self.custom_flag_table.blockSignals(False)
-                    self._set_custom_flag_status("A FastFlag with that name already exists.", True)
-                    return
-                if self._rename_custom_fastflag(original_name, current_name, value):
-                    self._set_custom_flag_status()
-                    self._load_custom_flag_table()
-                return
-        flags = self.owner.load_custom_fastflags()
-        if current_name:
-            flags[current_name] = value
-            self._persist_custom_flag_mapping(flags)
-
-
-    def _set_custom_flag_enabled(self, name, enabled):
-        if self._reloading:
-            return
-        state = self.owner.load_custom_fastflag_state()
-        disabled = set(state.get("disabled", []))
-        if enabled:
-            disabled.discard(name)
-        else:
-            disabled.add(name)
-        state["disabled"] = sorted(disabled)
-        self.owner.save_custom_fastflag_state(state)
-        self.owner.refresh_custom_fastflag_hotkeys()
-        self.owner.mark_custom_fastflags_changed()
-        if not self.owner.proxy_suspended_for_api():
-            self.owner.refresh_proxy_for_active_session()
-        if self.owner.roblox_running is True and not self.owner.roblox_proxy_active:
-            self.owner.set_fastflags_restart_required(True)
-        button = getattr(self, "_custom_status_buttons", {}).get(name)
-        if button is not None:
-            button.setToolTip("Enabled" if enabled else "Disabled")
-
-    def clear_custom_fastflag_hotkey(self, name):
-        state = self.owner.load_custom_fastflag_state()
-        bindings = dict(state.get("keybinds", {}))
-        if name not in bindings:
-            return
-        bindings.pop(name, None)
-        state["keybinds"] = bindings
-        state = self.owner.save_custom_fastflag_state(state)
-        self.owner.refresh_custom_fastflag_hotkeys()
-        button = getattr(self, "_custom_hotkey_buttons", {}).get(name)
-        reset = getattr(self, "_custom_hotkey_reset_buttons", {}).get(name)
-        if button is not None:
-            button.setText(hotkey_text(None))
-        if reset is not None:
-            reset.setEnabled(False)
-
-    def add_catalog_fastflags(self, additions):
-        additions = normalize_fastflags(additions)
-        if not additions:
-            return
-        flags = self.owner.load_custom_fastflags()
-        flags.update(additions)
-        self._persist_custom_flag_mapping(flags)
-        self._load_custom_flag_table()
-
-    def open_fastflag_list(self):
-        dialog = FastFlagListDialog(self)
-        dialog.exec()
-
-    def edit_custom_fastflag_hotkey(self, name):
-        if sys.platform != "win32":
-            QMessageBox.information(self, "FastFlag Hotkey", "Global FastFlag hotkeys are currently available on Windows.")
-            return
-        dialog = FastFlagHotkeyCaptureDialog(name, self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        state = self.owner.load_custom_fastflag_state()
-        bindings = dict(state.get("keybinds", {}))
-        if dialog.clear_requested:
-            bindings.pop(name, None)
-        elif dialog.binding is not None:
-            bindings[name] = dialog.binding
-        state["keybinds"] = bindings
-        state = self.owner.save_custom_fastflag_state(state)
-        self.owner.refresh_custom_fastflag_hotkeys()
-        button = getattr(self, "_custom_hotkey_buttons", {}).get(name)
-        reset = getattr(self, "_custom_hotkey_reset_buttons", {}).get(name)
-        current_binding = state.get("keybinds", {}).get(name)
-        if button is not None:
-            button.setText(hotkey_text(current_binding))
-        if reset is not None:
-            reset.setEnabled(current_binding is not None)
-
-    def add_custom_fastflag(self):
-        catalog = useful_fastflag_catalog()
-        dialog = QDialog(self)
-        dialog.setObjectName("addCustomFastFlagDialog")
-        dialog.setWindowTitle("Add Custom FastFlag")
-        dialog.resize(570, 390)
-        dialog.setMinimumSize(500, 330)
-        apply_window_icon(dialog)
-        root = blur_content_layout(dialog, dialog, "Add Custom FastFlag", (16, 12, 16, 16), 9)
-
-        name = QLineEdit()
-        name.setPlaceholderText("FastFlag name — type anything or choose a suggestion")
-        root.addWidget(name)
-        suggestions = QListWidget()
-        suggestions.setObjectName("fastFlagSuggestions")
-        suggestions.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        root.addWidget(suggestions, 1)
-        value = QLineEdit()
-        value.setPlaceholderText("Value")
-        root.addWidget(value)
-
-        info = QLabel("The list contains curated suggestions. Any other FastFlag name is still accepted.")
-        info.setStyleSheet("color:#85858a;background:transparent;")
-        info.setWordWrap(True)
-        root.addWidget(info)
-
-        actions = QHBoxLayout()
-        add = QPushButton("Add")
-        cancel = QPushButton("Cancel")
-        actions.addStretch(1)
-        actions.addWidget(cancel)
-        actions.addWidget(add)
-        root.addLayout(actions)
-
-        def update_suggestions(text_value=""):
-            query = str(text_value or "").strip().casefold()
-            suggestions.clear()
-            matches = []
-            for flag_name, meta in catalog.items():
-                haystack = (flag_name + " " + str(meta.get("category", "")) + " " + " ".join(meta.get("presets", ()))).casefold()
-                if query and query not in haystack:
-                    continue
-                matches.append((flag_name, meta))
-            matches.sort(key=lambda item: (0 if item[0].casefold().startswith(query) else 1, item[0].casefold()))
-            for flag_name, meta in matches[:80]:
-                item = QListWidgetItem(flag_name)
-                item.setData(Qt.ItemDataRole.UserRole, flag_name)
-                detail = str(meta.get("value", ""))
-                source = str(meta.get("source", ""))
-                item.setToolTip(f"{source} · default value: {detail}" if source else f"Default value: {detail}")
-                suggestions.addItem(item)
-
-        def choose_item(item):
-            if item is None:
-                return
-            flag_name = str(item.data(Qt.ItemDataRole.UserRole) or item.text()).strip()
-            name.setText(flag_name)
-            meta = catalog.get(flag_name, {})
-            if not value.text().strip():
-                value.setText(str(meta.get("value", "")))
-            value.setFocus()
-            value.selectAll()
-
-        name.textChanged.connect(update_suggestions)
-        suggestions.itemClicked.connect(choose_item)
-        suggestions.itemDoubleClicked.connect(lambda item: (choose_item(item), dialog.accept()))
-        add.clicked.connect(dialog.accept)
-        cancel.clicked.connect(dialog.reject)
-        name.returnPressed.connect(lambda: value.setFocus())
-        value.returnPressed.connect(dialog.accept)
-
-        dialog.setStyleSheet(r'''
-            QDialog#addCustomFastFlagDialog { background:#0b0c0d; color:#dedede; }
-            QWidget { color:#dedede; }
-            QLabel { background:transparent; }
-            QLineEdit { background:#0d0d0e; color:#ededed; border:1px solid #2a2a2d; border-radius:6px; min-height:33px; padding:0 9px; }
-            QLineEdit:focus { background:#101012; border-color:#45454a; }
-            QListWidget#fastFlagSuggestions { background:#080809; border:1px solid #252528; border-radius:7px; padding:3px; outline:0; }
-            QListWidget#fastFlagSuggestions::item { min-height:27px; padding:3px 8px; border-radius:5px; }
-            QListWidget#fastFlagSuggestions::item:hover { background:#121214; }
-            QListWidget#fastFlagSuggestions::item:selected { background:#1d1e21; color:#fff; }
-            QPushButton { background:#111113; color:#e9e9e9; border:1px solid #2a2a2d; border-radius:6px; padding:6px 11px; }
-            QPushButton:hover { background:#19191c; border-color:#414146; }
-        ''')
-        apply_blur_style(dialog)
-        update_suggestions()
-        name.setFocus()
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        key = name.text().strip()
-        if not key:
-            QMessageBox.warning(self, "Custom FastFlags", "FastFlag name cannot be empty.")
-            return
-        flags = self.owner.load_custom_fastflags()
-        flags[key] = value.text()
-        self._persist_custom_flag_mapping(flags)
-        self._load_custom_flag_table()
-
-    def _remove_custom_flag_at_position(self, position):
-        row = self.custom_flag_table.rowAt(position.y())
-        if row < 0:
-            return
-        self.custom_flag_table.clearSelection()
-        self.custom_flag_table.selectRow(row)
-        self.remove_selected_custom_fastflags()
-
-    def remove_selected_custom_fastflags(self):
-        rows = sorted({index.row() for index in self.custom_flag_table.selectionModel().selectedRows()}, reverse=True)
-        if not rows:
-            return
-        names = []
-        for row in rows:
-            item = self.custom_flag_table.item(row, 0)
-            if item:
-                names.append(item.text())
-        flags = self.owner.load_custom_fastflags()
-        for name in names:
-            flags.pop(name, None)
-        if self._persist_custom_flag_mapping(flags):
-            self._load_custom_flag_table()
-
-    def schedule_custom_fastflag_save(self, *_):
-        if self._reloading:
-            return
-        try:
-            self._parse_custom_fastflag_editor()
-        except Exception as exc:
-            self._set_custom_flag_status(str(exc), True)
-            return
-        self._set_custom_flag_status()
-
-    def persist_custom_fastflags(self, *_):
-        if self._reloading:
-            return
-        try:
-            flags = self._parse_custom_fastflag_editor()
-        except Exception as exc:
-            self._set_custom_flag_status(str(exc), True)
-            return
-        self._set_custom_flag_status()
-        if self._persist_custom_flag_mapping(flags):
-            self._load_custom_flag_table()
-        self.update_change_state()
-
-    def import_custom_fastflags(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import FastFlags", "", "JSON (*.json);;All files (*)")
-        if not path:
-            return
-        try:
-            payload = read_json_object(path, {})
-            if not isinstance(payload, dict):
-                raise ValueError("The JSON root must be an object of FastFlag name/value pairs.")
-            flags = normalize_fastflags(payload)
-            self._persist_custom_flag_mapping(flags)
-            self._load_custom_flag_table()
-            self._sync_custom_json_from_saved(flags)
-        except Exception as exc:
-            QMessageBox.warning(self, "Custom FastFlags", str(exc))
-
-    def export_custom_fastflags(self):
-        flags = self.owner.load_custom_fastflags()
-        path, _ = QFileDialog.getSaveFileName(self, "Export FastFlags", "custom_fastflags.json", "JSON (*.json)")
-        if path:
-            write_json_object(path, flags)
-
-    def update_attached_state(self):
-        if self.owner.api_attached:
-            self.attached_label.setText(
-                'LelSploit is currently attached to Roblox. Live FastFlags and proxy features are unavailable in this session. '
-                '<a href="detach" style="color:#79b8ff;text-decoration:none;"><b>Detach & restart</b></a>'
-            )
-            self.attached_banner.setVisible(True)
-            return
-        if (
-            self.owner.roblox_running is True
-            and self.owner.proxy_features_needed()
-            and self.owner.roblox_session_mode == "attach"
-            and not getattr(self.owner, "_fastflags_detach_restart_in_progress", False)
-        ):
-            self.attached_label.setText(
-                'Roblox is running in Attach mode. Roblox must restart before live FastFlags can use the client proxy. '
-                '<a href="proxy_restart" style="color:#79b8ff;text-decoration:none;"><b>Restart now</b></a>'
-            )
-            self.attached_banner.setVisible(True)
-            return
-        self.attached_banner.hide()
-
-    @staticmethod
-    def _default_spin(minimum, maximum):
-        spin = QSpinBox()
-        spin.setRange(minimum - 1, maximum)
-        spin.setSpecialValueText("Default")
-        spin.setValue(minimum - 1)
-        spin.setFixedWidth(190)
-        return spin
-
-    def build_assets_page(self):
-        page = QWidget(); page.setObjectName("assetsPage"); page.setAutoFillBackground(False); root = QVBoxLayout(page); root.setContentsMargins(0,0,0,0)
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        content = QWidget(); layout = QVBoxLayout(content); layout.setContentsMargins(1,1,1,1); layout.setSpacing(7)
-        font_title = QLabel("Custom Font"); font_title.setObjectName("sectionTitle"); layout.addWidget(font_title)
-        font_row = ModificationSourceRow(self, "Custom Font", "__font__", "font")
-        self.asset_rows.append(font_row); layout.addWidget(font_row)
-        for category, items in ASSET_TARGETS.items():
-            title = QLabel(category); title.setObjectName("sectionTitle"); layout.addWidget(title)
-            if category == "Skyboxes":
-                apply_all = QPushButton("Apply to all Sky faces")
-                apply_all.setObjectName("flatButton")
-                apply_all.clicked.connect(self.apply_all_sky_faces)
-                layout.addWidget(apply_all, 0, Qt.AlignmentFlag.AlignLeft)
-            for label, target in items.items():
-                row = ModificationSourceRow(self, label, target, "asset")
-                self.asset_rows.append(row); layout.addWidget(row)
-        layout.addStretch(1); scroll.setWidget(content); root.addWidget(scroll,1)
-        return page
-
-    def apply_all_sky_faces(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Choose skybox source", "", "All files (*)")
-        if not path:
-            return
-        targets = [(label, target) for label, target in ASSET_TARGETS["Skyboxes"].items() if label.startswith("Sky —")]
-        errors = []
-        for label, target in targets:
-            try: set_modification(label, target, path, "asset")
-            except Exception as exc: errors.append(str(exc))
-        for row in self.asset_rows: row.refresh()
-        self.owner.set_fastflags_restart_required(self.owner.roblox_running is True)
-        if errors: QMessageBox.warning(self, "Skybox", errors[0])
-        else: self.owner.log("Applied source to all default sky faces.", "success")
-
-    def build_username_page(self):
-        page = QWidget()
-        page.setObjectName("usernamePage")
-        page.setAutoFillBackground(False)
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(14, 12, 14, 14)
-        layout.setSpacing(14)
-
-        heading = QHBoxLayout()
-        title = QLabel("Username Spoofer")
-        title.setStyleSheet("font-size:14px;font-weight:600;color:#f1f1f1;background:transparent;")
-        heading.addWidget(title)
-        heading.addStretch(1)
-        layout.addLayout(heading)
-
-        card = QFrame()
-        card.setObjectName("usernameSpoofCard")
-        card.setStyleSheet(
-            "QFrame#usernameSpoofCard { background:#0c0c0c; border:1px solid #242424; border-radius:8px; }"
-        )
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(12, 12, 12, 12)
-        card_layout.setSpacing(10)
-
-        grid = QGridLayout()
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(10)
-        grid.setColumnMinimumWidth(0, 92)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnMinimumWidth(2, 112)
-        grid.setColumnMinimumWidth(3, 82)
-
-        everyone_label = QLabel("Everyone Else")
-        everyone_label.setStyleSheet("background:transparent;color:#d8d8d8;")
-        grid.addWidget(everyone_label, 0, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.spoof_others = QLineEdit()
-        self.spoof_others.setPlaceholderText("Spoofed username")
-        self.spoof_others.setMinimumHeight(34)
-        grid.addWidget(self.spoof_others, 0, 1)
-        self.spoof_others_apply = BrightCheckBox("Apply Ingame")
-        grid.addWidget(self.spoof_others_apply, 0, 2, Qt.AlignmentFlag.AlignVCenter)
-        self.spoof_others_verified = BrightCheckBox("Verified")
-        grid.addWidget(self.spoof_others_verified, 0, 3, Qt.AlignmentFlag.AlignVCenter)
-
-        yours_label = QLabel("Your Username")
-        yours_label.setStyleSheet("background:transparent;color:#d8d8d8;")
-        grid.addWidget(yours_label, 1, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.spoof_yours = QLineEdit()
-        self.spoof_yours.setPlaceholderText("Spoofed username")
-        self.spoof_yours.setMinimumHeight(34)
-        grid.addWidget(self.spoof_yours, 1, 1)
-        self.spoof_yours_apply = BrightCheckBox("Apply Ingame")
-        grid.addWidget(self.spoof_yours_apply, 1, 2, Qt.AlignmentFlag.AlignVCenter)
-        self.spoof_yours_verified = BrightCheckBox("Verified")
-        grid.addWidget(self.spoof_yours_verified, 1, 3, Qt.AlignmentFlag.AlignVCenter)
-        card_layout.addLayout(grid)
-
-        divider = QFrame()
-        divider.setFixedHeight(1)
-        divider.setStyleSheet("background:#202020;border:0;")
-        card_layout.addWidget(divider)
-
-        self.spoof_creator = BrightCheckBox("Make Yourself Game Creator")
-        card_layout.addWidget(self.spoof_creator, 0, Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(card)
-
-        layout.addStretch(1)
-
-        for control in (self.spoof_others, self.spoof_others_apply, self.spoof_others_verified,
-                        self.spoof_yours, self.spoof_yours_apply, self.spoof_yours_verified, self.spoof_creator):
-            signal = getattr(control, "textChanged", None) or getattr(control, "toggled", None)
-            if signal is not None:
-                signal.connect(self.schedule_username_persist)
-        return page
-
-    def _username_settings(self):
-        return {
-            "save": True,
-            "others_username": self.spoof_others.text().strip(),
-            "others_apply": self.spoof_others_apply.isChecked(),
-            "others_verified": self.spoof_others_verified.isChecked(),
-            "your_username": self.spoof_yours.text().strip(),
-            "your_apply": self.spoof_yours_apply.isChecked(),
-            "your_verified": self.spoof_yours_verified.isChecked(),
-            "make_creator": self.spoof_creator.isChecked(),
-        }
-
-    def schedule_username_persist(self, *_):
-        if not self._reloading:
-            self.username_save_timer.start()
-
-    def persist_username_spoofer(self, *_):
-        if self._reloading:
-            return
-        settings = self._username_settings()
-        changed = settings != self._baseline_username_settings
-        save_username_spoofer_settings(settings)
-        save_username_proxy_runtime(settings)
-        self._baseline_username_settings = dict(settings)
-        if changed and self.owner.roblox_running is True:
-            self.owner.set_fastflags_restart_required(True)
-            self.update_change_state()
-
-    def build_custom_page(self):
-        page = QWidget()
-        page.setObjectName("customModsPage")
-        page.setAutoFillBackground(False)
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(12)
-        top = QHBoxLayout()
-        top.setContentsMargins(0, 0, 0, 0)
-        title = QLabel("Custom Modifications")
-        title.setStyleSheet("font-size:14px;font-weight:600;color:#eee;background:transparent;")
-        top.addWidget(title)
-        top.addStretch(1)
-        add = QPushButton("Add modification")
-        add.setFixedHeight(32)
-        add.clicked.connect(self.add_custom_modification)
-        top.addWidget(add)
-        layout.addLayout(top)
-        self.custom_scroll = QScrollArea()
-        self.custom_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self.custom_scroll.setWidgetResizable(True)
-        self.custom_scroll.setStyleSheet("QScrollArea{border:0;background:transparent;} QScrollArea QWidget{background:transparent;}")
-        self.custom_content = QWidget()
-        self.custom_content.setStyleSheet("background:transparent;")
-        self.custom_layout = QVBoxLayout(self.custom_content)
-        self.custom_layout.setContentsMargins(0, 0, 0, 0)
-        self.custom_layout.setSpacing(8)
-        self.custom_empty = QLabel("No custom modifications yet.")
-        self.custom_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.custom_empty.setStyleSheet("color:#666;background:transparent;padding:28px;")
-        self.custom_layout.addWidget(self.custom_empty)
-        self.custom_layout.addStretch(1)
-        self.custom_scroll.setWidget(self.custom_content)
-        layout.addWidget(self.custom_scroll, 1)
-        return page
-
-    def add_custom_modification(self):
-        dialog = CustomModificationDialog(self)
-        if dialog.exec() != QDialog.DialogCode.Accepted: return
-        try:
-            set_modification(dialog.display_name.text().strip(), dialog.target.text().strip(), dialog.source.text().strip(), "custom")
-            self.owner.set_fastflags_restart_required(self.owner.roblox_running is True)
-            self.owner.log(f"Applied {dialog.display_name.text().strip()}.", "success")
-            self.refresh_custom_mods()
-        except Exception as exc:
-            QMessageBox.warning(self, "Custom Modification", str(exc))
-
-    def refresh_custom_mods(self):
-        if not hasattr(self, "custom_layout"):
-            return
-        while self.custom_layout.count() > 1:
-            item = self.custom_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None and widget is not getattr(self, "custom_empty", None):
-                widget.deleteLater()
-        entries = [entry for entry in _read_modifications_data().get("entries", []) if entry.get("kind") == "custom"]
-        self.custom_empty.setVisible(not entries)
-        if self.custom_layout.indexOf(self.custom_empty) < 0:
-            self.custom_layout.insertWidget(0, self.custom_empty)
-        insert_at = 1 if self.custom_empty.isVisible() else 0
-        for entry in entries:
-            card = QFrame()
-            card.setObjectName("modRow")
-            row = QHBoxLayout(card)
-            row.setContentsMargins(12, 9, 10, 9)
-            details = QVBoxLayout()
-            name = QLabel(str(entry.get("display_name") or "Modification"))
-            name.setStyleSheet("color:#eee;font-weight:600;background:transparent;")
-            details.addWidget(name)
-            target = QLabel(str(entry.get("target") or ""))
-            target.setStyleSheet("color:#777;font-size:10px;background:transparent;")
-            details.addWidget(target)
-            row.addLayout(details, 1)
-            remove = QPushButton("Remove")
-            remove.setFixedWidth(72)
-            remove.clicked.connect(lambda checked=False, target=entry.get("target"): self.remove_custom_mod(target))
-            row.addWidget(remove)
-            self.custom_layout.insertWidget(insert_at, card)
-            insert_at += 1
-
-    def remove_custom_mod(self, target):
-        try:
-            remove_modification(target); self.owner.set_fastflags_restart_required(self.owner.roblox_running is True); self.refresh_custom_mods()
-        except Exception as exc: QMessageBox.warning(self, "Custom Modification", str(exc))
-
-    def _update_slider_labels(self, *_):
-        value = self.mesh_slider.value(); self.mesh_value.setText("Default" if value == 0 else f"Level {value-1}")
-        value = self.frm_slider.value(); self.frm_value.setText("Default" if value == 0 else f"Quality {value}")
-
-    def on_manager_toggled(self, enabled):
-        self.managed_panel.setVisible(bool(enabled)); self.update_change_state()
-
-    def reload(self):
-        self._reloading = True
-        try:
-            self.current_flags = self.owner.load_fastflags(); keys = FASTFLAG_KEYS; enabled = self.owner.fastflags_enabled()
-            self.manager_check.setChecked(enabled); self.managed_panel.setVisible(enabled)
-            mode = None
-            if self.current_flags.get(keys["render_d3d11"]) == "True": mode = "D3D11"
-            elif self.current_flags.get(keys["render_vulkan"]) == "True": mode = "Vulkan"
-            elif self.current_flags.get(keys["render_opengl"]) == "True": mode = "OpenGL"
-            self.render_combo.setCurrentIndex(max(0, self.render_combo.findData(mode)))
-            self.msaa_combo.setCurrentIndex(max(0, self.msaa_combo.findData(self.current_flags.get(keys["msaa"]))))
-            self.scaling_check.setChecked(self.current_flags.get(keys["display_scaling"]) == "True")
-            self.fullscreen_check.setChecked(self.current_flags.get(keys["manual_fullscreen"]) == "True")
-            self.texture_combo.setCurrentIndex(max(0, self.texture_combo.findData(self.current_flags.get(keys["texture_level"]))))
-            static = self.current_flags.get(keys["lod_static"])
-            self.mesh_check.setChecked(static is not None)
-            self.mesh_slider.setValue(max(0, min(4, int(static)+1)) if str(static).lstrip("-").isdigit() else 0)
-            frm = self.current_flags.get(keys["frm_quality"])
-            self.frm_check.setChecked(frm is not None)
-            self.frm_slider.setValue(max(0, min(21, int(frm))) if str(frm).isdigit() else 0)
-            self.grey_sky_check.setChecked(self.current_flags.get(keys["grey_sky"]) == "True")
-            self.pause_voxelizer_check.setChecked(self.current_flags.get(keys["pause_voxelizer"]) == "True")
-            for spin, key in ((self.grass_max,"grass_max"),(self.grass_min,"grass_min"),(self.grass_motion,"grass_motion")):
-                value = self.current_flags.get(keys[key]); spin.setValue(int(value) if str(value).lstrip("-").isdigit() else spin.minimum())
-            saved_fps = self.owner.settings.value("global/framerate_cap", None)
-            if saved_fps is None: saved_fps = read_roblox_framerate_cap() or 0
-            try: saved_fps = int(saved_fps)
-            except (TypeError, ValueError): saved_fps = 0
-            self.fps_cap.setValue(max(0,min(1000,saved_fps)))
-            self._baseline_fps = self.fps_cap.value(); self._baseline_flags = normalize_fastflags(self.current_flags); self._baseline_enabled = bool(enabled)
-            custom_flags = self.owner.load_custom_fastflags()
-            self._sync_custom_json_from_saved(custom_flags)
-            self._baseline_custom_flags = normalize_fastflags(custom_flags)
-            self._load_custom_flag_table()
-            self._update_slider_labels()
-            saved = load_username_spoofer_settings()
-            self.spoof_others.setText(str(saved.get("others_username", ""))); self.spoof_others_apply.setChecked(bool(saved.get("others_apply")))
-            self.spoof_others_verified.setChecked(bool(saved.get("others_verified"))); self.spoof_yours.setText(str(saved.get("your_username", ""))); self.spoof_yours_apply.setChecked(bool(saved.get("your_apply")))
-            self.spoof_yours_verified.setChecked(bool(saved.get("your_verified"))); self.spoof_creator.setChecked(bool(saved.get("make_creator")))
-            self._baseline_username_settings = dict(self._username_settings())
-            for row in self.asset_rows: row.refresh()
-            self.refresh_custom_mods()
-        finally:
-            self._reloading = False
-        self.update_attached_state()
-        self.update_change_state()
-
-    def collect_flags(self):
-        flags = dict(self.current_flags); keys = FASTFLAG_KEYS
-        for key in keys.values(): flags.pop(key, None)
-        mode = self.render_combo.currentData()
-        if mode:
-            flags[keys[{"D3D11":"render_d3d11","Vulkan":"render_vulkan","OpenGL":"render_opengl"}[mode]]] = "True"
-            if mode in ("Vulkan", "OpenGL"): flags[keys["render_disable_d3d11"]] = "True"
-        msaa = self.msaa_combo.currentData()
-        if msaa is not None: flags[keys["msaa"]] = str(msaa)
-        if self.scaling_check.isChecked(): flags[keys["display_scaling"]] = "True"
-        if self.fullscreen_check.isChecked(): flags[keys["manual_fullscreen"]] = "True"
-        texture = self.texture_combo.currentData()
-        if texture is not None: flags[keys["texture_enabled"]] = "True"; flags[keys["texture_level"]] = str(texture)
-        if self.mesh_check.isChecked() and self.mesh_slider.value() > 0:
-            level = self.mesh_slider.value()
-            for i, key in enumerate(("lod_l0","lod_l12","lod_l23","lod_l34")):
-                flags[keys[key]] = str(max(0,min(level-1-i,3)))
-            flags[keys["lod_static"]] = str(level-1)
-        if self.frm_check.isChecked() and self.frm_slider.value() > 0: flags[keys["frm_quality"]] = str(self.frm_slider.value())
-        if self.grey_sky_check.isChecked(): flags[keys["grey_sky"]] = "True"
-        if self.pause_voxelizer_check.isChecked(): flags[keys["pause_voxelizer"]] = "True"
-        for spin, key in ((self.grass_max,"grass_max"),(self.grass_min,"grass_min"),(self.grass_motion,"grass_motion")):
-            if spin.value() > spin.minimum(): flags[keys[key]] = str(spin.value())
-        return normalize_fastflags(flags)
-
-    def has_unsaved_changes(self):
-        return not self._reloading and (bool(self.manager_check.isChecked()) != self._baseline_enabled or self.collect_flags() != self._baseline_flags or self.fps_cap.value() != self._baseline_fps)
-
-    def update_change_state(self, *_):
-        if self._reloading:
-            return
-        dirty = self.has_unsaved_changes()
-        self.restart_bar.setVisible(
-            self.owner.roblox_running is True
-            and (dirty or self.owner.fastflags_restart_required())
-        )
-        if dirty:
-            self.auto_save_timer.start()
-
-    def save_changes(self, _checked=False, quiet=False):
-        flags = self.collect_flags(); enabled = self.manager_check.isChecked(); changed = flags != self._baseline_flags or enabled != self._baseline_enabled
-        fps_changed = self.fps_cap.value() != self._baseline_fps
-        if enabled != self._baseline_enabled and not enabled: self.owner.set_fastflags_enabled(False)
-        if flags != self._baseline_flags: self.current_flags = self.owner.save_fastflags(flags)
-        else: self.current_flags = dict(flags)
-        if enabled != self._baseline_enabled and enabled: self.owner.set_fastflags_enabled(True)
-        elif enabled and flags != self._baseline_flags: self.owner.request_fastflag_sync(force=True)
-        if fps_changed:
-            value = self.fps_cap.value()
-            self.owner.settings.setValue("global/framerate_cap", value)
-            self.owner.settings.sync()
-            if self.owner.roblox_running is not True:
-                self.owner.apply_saved_framerate_cap()
-        self._baseline_flags = normalize_fastflags(self.current_flags); self._baseline_enabled = bool(enabled); self._baseline_fps = self.fps_cap.value()
-        if changed or fps_changed:
-            self.owner.set_fastflags_restart_required(self.owner.roblox_running is True)
-            if enabled:
-                prime_windows_fastflag_cache(self.owner.load_effective_fastflags())
-                self.owner.refresh_proxy_for_active_session()
-        if not quiet and (changed or fps_changed): self.owner.log("Client settings saved.", "success")
-        self.update_change_state(); return changed or fps_changed
-
-    def reset_configuration(self):
-        self.render_combo.setCurrentIndex(0); self.msaa_combo.setCurrentIndex(0); self.scaling_check.setChecked(False); self.fullscreen_check.setChecked(False); self.texture_combo.setCurrentIndex(0)
-        self.mesh_check.setChecked(False); self.mesh_slider.setValue(0); self.frm_check.setChecked(False); self.frm_slider.setValue(0); self.grey_sky_check.setChecked(False); self.pause_voxelizer_check.setChecked(False)
-        for spin in (self.grass_max,self.grass_min,self.grass_motion): spin.setValue(spin.minimum())
-        self.fps_cap.setValue(0); self.update_change_state()
-
-    def restart_now(self, _link="restart"):
-        self.save_changes(quiet=True); self.owner.restart_roblox_from_fastflags() if self.owner.roblox_running is True else self.update_change_state()
-
-    def closeEvent(self, event):
-        try: self.save_changes(quiet=True); self.persist_username_spoofer(); self.persist_custom_fastflags()
-        except Exception as exc: self.owner.log(f"Could not save client settings: {exc}", "warning")
-        event.accept()
+                                                                                   
+_lelsploit_fastflags.configure_host(globals())
+FastFlagsWindow = _lelsploit_fastflags.FastFlagsWindow
 
 
 class LelSploitWindow(QMainWindow):
@@ -12191,6 +9453,7 @@ class LelSploitWindow(QMainWindow):
         self.extensions_window = None
         self.documentation_window = None
         self.extension_smooth_scroll = SmoothScrollService(self)
+        self.extension_window_resize = ExtensionWindowResizeService(self)
         self.extension_runtime = LelExtensionRuntime(self)
         self._extension_events = {}
         self._extension_event_timers = {}
@@ -13732,13 +10995,13 @@ class LelSploitWindow(QMainWindow):
             self.fastflags_window.update_change_state()
 
     def erase_local_data(self):
-        """Erase LelSploit-owned mutable data without touching installation/runtime assets.
 
-        This intentionally deletes only paths LelSploit itself owns as user state,
-        cache, backup, extension content, or runtime output. Unknown files/folders
-        beside the app are preserved because packaged builds can contain seemingly
-        arbitrary dependency directories that are required to start.
-        """
+
+
+
+
+
+
         errors = []
 
         def remove_file(path):
@@ -13790,6 +11053,7 @@ class LelSploitWindow(QMainWindow):
         try:
             self.extension_runtime.retain_extensions(set())
             self.extension_smooth_scroll.retain_extensions(set())
+            self.extension_window_resize.retain_extensions(set())
             self.visual_wizard_service.retain_extensions(set())
             self._clear_extension_shortcuts()
         except Exception:
@@ -14056,6 +11320,7 @@ class LelSploitWindow(QMainWindow):
             if record.get("manifest") and record["manifest"]["id"] not in disabled
         }
         self.extension_smooth_scroll.retain_extensions(set(enabled))
+        self.extension_window_resize.retain_extensions(set(enabled))
         self.visual_wizard_service.retain_extensions(set(enabled))
         self.extension_runtime.retain_extensions(set(enabled))
         self._extension_events = {}
@@ -15038,6 +12303,21 @@ class LelSploitWindow(QMainWindow):
                     self.log("Attach attempt stopped.", "warning")
         self.poll_roblox()
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_extension_events"):
+            self._queue_extension_event("window.resized", 40)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if hasattr(self, "_extension_events"):
+            self._queue_extension_event("window.moved", 40)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "_extension_events"):
+            self._queue_extension_event("window.state_changed", 20)
+
     def closeEvent(self, event):
         if (
             not self._force_exit
@@ -15078,6 +12358,17 @@ class LelSploitWindow(QMainWindow):
         event.accept()
         QApplication.instance().quit()
 
+
+
+                                                                                     
+for _feature_module in (
+    globals().get("_lelsploit_scriptblox"),
+    globals().get("_lelsploit_tools"),
+    globals().get("_lelsploit_fastflags"),
+):
+    if _feature_module is not None and hasattr(_feature_module, "configure_host"):
+        _feature_module.configure_host(globals())
+del _feature_module
 
 def _report_startup_error(exc):
     detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
