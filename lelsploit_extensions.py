@@ -62,7 +62,7 @@ EXTENSION_PACKAGE_LIMIT = 10 * 1024 * 1024
 MARKETPLACE_PACKAGE_LIMIT = 10 * 1024 * 1024
 MARKETPLACE_RESPONSE_LIMIT = 4 * 1024 * 1024
 MARKETPLACE_ICON_LIMIT = 512 * 1024
-MARKETPLACE_DEFAULT_API = "https://lelsploit-marketplace.imthacoolcat.workers.dev"
+MARKETPLACE_DEFAULT_API = "https://marketplace.lelsploit.workers.dev"
 MARKETPLACE_CA_BUNDLE = RUNTIME_DIR / "cacert.pem"
 
 _HOST_CONFIGURED = False
@@ -431,7 +431,7 @@ class ExtensionMarketplacePane(QWidget):
         search_row = QHBoxLayout()
         search_row.setContentsMargins(0, 0, 0, 0)
         search_row.setSpacing(8)
-        self.search = QLineEdit()
+        self.search = SearchLineEdit()
         self.search.setPlaceholderText("Search extensions, authors, or descriptions...")
         self.search.setClearButtonEnabled(True)
         self.search.setFixedHeight(46)
@@ -1382,7 +1382,7 @@ class ExtensionsWindow(QDialog):
             ext_id = manifest["id"]
             is_disabled = ext_id in disabled
             toggle = self._image_action_button(
-                "enable" if is_disabled else "disable",
+                "run" if is_disabled else "disable",
                 "Enable extension" if is_disabled else "Disable extension",
             )
             toggle.clicked.connect(lambda checked=False, eid=ext_id: self.toggle_extension(eid))

@@ -2034,7 +2034,7 @@ try:
         QAction, QColor, QFont, QIcon, QPixmap, QKeySequence, QShortcut, QTextCharFormat, QTextCursor, QTextDocument, QPainter, QPainterPath, QRegion, QSyntaxHighlighter,
     )
     from PyQt6.QtWidgets import (
-        QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFrame, QInputDialog,
+        QAbstractButton, QToolTip, QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFrame, QInputDialog,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
         QPushButton, QScrollArea, QStackedWidget, QTabWidget, QTabBar, QTextBrowser, QVBoxLayout, QWidget, QGraphicsOpacityEffect, QButtonGroup,
         QListWidget, QListWidgetItem, QAbstractItemView, QAbstractScrollArea, QSystemTrayIcon, QSpinBox, QSlider, QHeaderView, QTableWidget, QTableWidgetItem,
@@ -2057,6 +2057,89 @@ except ImportError as exc:
         except Exception:
             pass
     raise SystemExit(message) from exc
+
+
+class SearchLineEdit(QLineEdit):
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.returnPressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+def erase_generated_files(root, kind):
+    """Delete only the requested generated data; never traverse directory links."""
+    if kind not in {'logs', 'workspace'}:
+        raise ValueError('Unsupported cleanup target.')
+    root = Path(root)
+    errors = []
+    def linked(path):
+        return path.is_symlink() or bool(getattr(os.path, 'isjunction', lambda p: False)(path))
+    target = root / kind
+    try:
+        if target.is_symlink():
+            target.unlink()
+        elif getattr(os.path, 'isjunction', lambda p: False)(target):
+            target.rmdir()
+        elif target.is_dir():
+            shutil.rmtree(target)
+        elif target.exists():
+            target.unlink()
+    except OSError as exc:
+        errors.append(f'{target}: {exc}')
+    if kind == 'logs' and root.is_dir():
+        def walk_error(exc):
+            errors.append(str(exc))
+        for directory, dirs, files in os.walk(root, followlinks=False, onerror=walk_error):
+            dirs[:] = [name for name in dirs if not linked(Path(directory) / name)]
+            for name in files:
+                path = Path(directory) / name
+                if path.suffix.casefold() == '.log':
+                    try:
+                        path.unlink(missing_ok=True)
+                    except OSError as exc:
+                        errors.append(f'{path}: {exc}')
+    return errors
+
+
+def luau_noncode_at_cursor(source):
+    """True when the end of a source prefix lies inside a string or comment."""
+    i, n = 0, len(source)
+    while i < n:
+        comment = source.startswith('--', i)
+        start = i + 2 if comment else i
+        bracket = re.match(r'\[(=*)\[', source[start:]) if source[start:start+1] == '[' else None
+        if bracket:
+            closing = ']' + bracket.group(1) + ']'
+            end = source.find(closing, start + len(bracket.group(0)))
+            if end < 0:
+                return True
+            i = end + len(closing)
+        elif comment:
+            end = source.find('\n', start)
+            if end < 0:
+                return True
+            i = end + 1
+        elif source[i] in {'"', "'", '`'}:
+            quote = source[i]
+            i += 1
+            while i < n:
+                if source[i] == '\\':
+                    i += 2
+                elif source[i] == quote:
+                    i += 1
+                    break
+                elif source[i] == '\n' and quote != '`':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            else:
+                return True
+        else:
+            i += 1
+    return False
 
 
 class CaptureExclusionService(QObject):
@@ -2986,6 +3069,10 @@ class TabCloseButton(QPushButton):
         super().leaveEvent(event)
 
 
+class TabAddButton(QPushButton):
+    """Small tab add control; Qt handles icon/state painting using its style."""
+
+
 class EditorTabBar(QTabBar):
     closeRequested = pyqtSignal(int)
     newRequested = pyqtSignal()
@@ -2996,16 +3083,20 @@ class EditorTabBar(QTabBar):
         self.setMouseTracking(True)
         self.setDrawBase(False)
         self.setExpanding(False)
-        self.setUsesScrollButtons(False)
+        self.setUsesScrollButtons(True)
         self.setElideMode(Qt.TextElideMode.ElideRight)
         self.setIconSize(QSize(13, 13))
         self.setMovable(True)
         self.setMinimumHeight(30)
         self.setMinimumWidth(30)
         self._hover_index = -1
-        self.new_button = QPushButton(parent if parent is not None else self)
+        self.new_button = TabAddButton(parent if parent is not None else self)
         self.new_button.setObjectName("tabAddButton")
+        self.new_button.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.new_button.setMouseTracking(True)
         self.new_button.setFixedSize(24, 24)
+        self.new_button.setFlat(True)
+        self.new_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         icon = app_icon("new")
         if not icon.isNull():
             self.new_button.setIcon(icon)
@@ -3051,19 +3142,28 @@ class EditorTabBar(QTabBar):
         self._hover_index = index
 
     def _place_new_button(self):
-        host = self.new_button.parentWidget()
-        if host is None:
+        tabs = self.parentWidget()
+        if not isinstance(tabs, QTabWidget):
             return
-        origin = self.mapTo(host, QPoint(0, 0))
-        if self.count():
-            rect = self.tabRect(self.count() - 1)
-            desired_x = origin.x() + rect.x() + rect.width() + 5
+        origin = self.mapTo(tabs, QPoint(0, 0))
+        desired_x = origin.x() + (self.tabRect(self.count() - 1).right() + 6 if self.count() else 2)
+        corner = tabs.cornerWidget(Qt.Corner.TopRightCorner)
+        right = corner.geometry().left() - 4 if corner is not None else tabs.width() - 2
+        # One parent and one stylesheet path in both positions. Only geometry
+        # changes, so the native QPushButton hover state remains consistent.
+        docked = self.count() >= 7 or desired_x + self.new_button.width() > right
+        if self.new_button.parentWidget() is not tabs:
+            self.new_button.setParent(tabs)
+            self.new_button.setObjectName("tabAddButton")
+            self.new_button.setFixedSize(24, 24)
+        if docked:
+            slot = getattr(tabs, '_plus_slot', None)
+            point = slot.mapTo(tabs, QPoint(0, 0)) if slot is not None else QPoint(right - 24, origin.y() + 3)
+            self.new_button.move(point)
         else:
-            desired_x = origin.x() + 2
-        max_x = max(2, host.width() - self.new_button.width() - 2)
-        x = max(2, min(desired_x, max_x))
-        y = origin.y() + max(2, (self.height() - self.new_button.height()) // 2)
-        self.new_button.move(x, y)
+            y = origin.y() + max(2, (self.height() - self.new_button.height()) // 2)
+            self.new_button.move(desired_x, y)
+        self.new_button.show()
         self.new_button.raise_()
 
     def mouseMoveEvent(self, event):
@@ -3132,6 +3232,27 @@ class EditorTabs(QTabWidget):
         super().__init__(parent)
         self._editor_bar = EditorTabBar(self)
         self.setTabBar(self._editor_bar)
+        self.setCornerWidget(QWidget(self), Qt.Corner.TopRightCorner)
+
+    def setCornerWidget(self, widget, corner=Qt.Corner.TopRightCorner):
+        if corner == Qt.Corner.TopRightCorner and widget is not None:
+            layout = widget.layout()
+            if layout is None:
+                layout = QHBoxLayout(widget)
+                layout.setContentsMargins(0, 0, 2, 2)
+                layout.setSpacing(4)
+            if not hasattr(self, '_plus_slot'):
+                self._plus_slot = QWidget(widget)
+                self._plus_slot.setObjectName('tabAddSlot')
+                self._plus_slot.setFixedSize(24, 24)
+                self._plus_slot.setStyleSheet('QWidget#tabAddSlot { background: transparent; border: none; }')
+            layout.insertWidget(0, self._plus_slot)
+        super().setCornerWidget(widget, corner)
+        QTimer.singleShot(0, self._editor_bar._place_new_button)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._editor_bar._place_new_button)
 
 
 class EditorPage(QWidget):
@@ -3722,6 +3843,9 @@ class CompletionPopup(QFrame):
             self.chosen.emit(str(name))
 
     def set_candidates(self, prefix, candidates, icons):
+        host = self.editor.window()
+        if self.parentWidget() is not host:
+            self.setParent(host, Qt.WindowType.Widget)
         self.prefix = prefix
         self.items.clear()
         widest = 0
@@ -3951,6 +4075,7 @@ class CodeEditor(QsciScintilla):
             self._analysis_timer.start()
 
     def _queue_autocomplete(self, force=False):
+        self._completion_keyboard_pending = True
         if force:
             self._completion_timer.stop()
             self.show_autocomplete(force=True)
@@ -4530,8 +4655,19 @@ class CodeEditor(QsciScintilla):
         entries.extend((name, "service" if name in services else "class") for name in class_names)
         return prefix, self._filter_entries(entries, prefix)
 
+    def _has_editor_focus(self):
+        widget = QApplication.focusWidget()
+        return self.hasFocus() or widget is self or (widget is not None and self.isAncestorOf(widget))
+
     def show_autocomplete(self, force=False):
-        if self.hasSelectedText() or not self.hasFocus():
+        keyboard_request = getattr(self, '_completion_keyboard_pending', False)
+        self._completion_keyboard_pending = False
+        if self.hasSelectedText() or not (self._has_editor_focus() or (keyboard_request and self.window().isActiveWindow())):
+            self._hide_autocomplete()
+            return
+        position = int(self.SendScintilla(self.SCI_GETCURRENTPOS))
+        source = self.text().encode('utf-8')[:position].decode('utf-8', errors='ignore')
+        if luau_noncode_at_cursor(source):
             self._hide_autocomplete()
             return
         self._refresh_recent_symbols()
@@ -4732,7 +4868,7 @@ class CodeEditor(QsciScintilla):
         QTimer.singleShot(0, self._hide_if_focus_left)
 
     def _hide_if_focus_left(self):
-        if not self.hasFocus():
+        if not self._has_editor_focus():
             self._hide_autocomplete()
 
     def hideEvent(self, event):
@@ -8330,8 +8466,10 @@ class VisualWizardService(QObject):
                                                                             
                                                    
 import lelsploit_extensions as _lelsploit_extensions
+import lelsploit_macros as _lelsploit_macros
 
 _lelsploit_extensions.configure_host(
+    SearchLineEdit=SearchLineEdit,
     LelComboBox=LelComboBox,
     app_icon=app_icon,
     apply_blur_style=apply_blur_style,
@@ -8348,6 +8486,8 @@ _lelsploit_extensions.configure_host(
     EXTENSION_TEMPLATES=EXTENSION_TEMPLATES,
 )
 ExtensionsWindow = _lelsploit_extensions.ExtensionsWindow
+_lelsploit_macros.configure_host(globals())
+MacrosWindow = _lelsploit_macros.MacrosWindow
 
 
 
@@ -8767,7 +8907,6 @@ start()</pre>
 </ol>
 """
 
-
 class DocumentationWindow(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
@@ -8784,6 +8923,7 @@ class DocumentationWindow(QDialog):
 
         self.browser = self._make_browser(DOCUMENTATION_HTML)
         self.extension_browser = self._make_browser(EXTENSIONS_DOCUMENTATION_HTML)
+        self.macro_browser = self._make_browser(_lelsploit_macros.MACRO_DOCUMENTATION_HTML)
         main_icon = lelsploit_icon()
         if not main_icon.isNull():
             self.tabs.addTab(self.browser, main_icon, "LelSploit")
@@ -8794,6 +8934,12 @@ class DocumentationWindow(QDialog):
             self.tabs.addTab(self.extension_browser, extension_icon, "Extensions")
         else:
             self.tabs.addTab(self.extension_browser, "Extensions")
+        macro_icon_path = ICON_DIR / "macros.png"
+        macro_icon = QIcon(str(macro_icon_path)) if macro_icon_path.is_file() else app_icon("macro")
+        if not macro_icon.isNull():
+            self.tabs.addTab(self.macro_browser, macro_icon, "Macros")
+        else:
+            self.tabs.addTab(self.macro_browser, "Macros")
         layout.addWidget(self.tabs, 1)
 
         self.setStyleSheet("""
@@ -8835,7 +8981,7 @@ class DocumentationWindow(QDialog):
 
     def showEvent(self, event):
         super().showEvent(event)
-        for browser in (self.browser, self.extension_browser):
+        for browser in (self.browser, self.extension_browser, self.macro_browser):
             if browser.verticalScrollBar().value() < 0:
                 browser.verticalScrollBar().setValue(0)
 
@@ -8988,6 +9134,15 @@ class SettingsWindow(QDialog):
         proxy_row.addWidget(self.proxy_start_combo)
         layout.addLayout(proxy_row)
 
+        macro_stop_row = QHBoxLayout()
+        macro_stop_row.addWidget(QLabel("Macro stop key"))
+        macro_stop_row.addStretch(1)
+        self.macro_stop_button = QPushButton("Record stop key…")
+        self.macro_stop_button.setFixedSize(210, 34)
+        self.macro_stop_button.clicked.connect(self.save_macro_stop_key)
+        macro_stop_row.addWidget(self.macro_stop_button)
+        layout.addLayout(macro_stop_row)
+
         self.capture_exclusion_check = BrightCheckBox("Hide from recordings/screenshare")
         self.capture_exclusion_check.toggled.connect(self.owner.set_screen_capture_hidden)
         self.capture_exclusion_check.setEnabled(sys.platform == "win32")
@@ -9012,7 +9167,17 @@ class SettingsWindow(QDialog):
         self.erase_button.setObjectName("dangerButton")
         self.erase_button.setFixedSize(124, 34)
         self.erase_button.clicked.connect(self.erase_data)
-        layout.addWidget(self.erase_button, 0, Qt.AlignmentFlag.AlignLeft)
+        erase_row = QHBoxLayout()
+        erase_row.addWidget(self.erase_button)
+        self.erase_logs_button = QPushButton('Erase Logs')
+        self.erase_workspace_button = QPushButton('Erase Workspace')
+        for button, kind in ((self.erase_logs_button, 'logs'), (self.erase_workspace_button, 'workspace')):
+            button.setObjectName('dangerButton')
+            button.setFixedHeight(34)
+            button.clicked.connect(lambda checked=False, target=kind: self.erase_generated(target))
+            erase_row.addWidget(button)
+        erase_row.addStretch(1)
+        layout.addLayout(erase_row)
         layout.addStretch(1)
 
         self.setStyleSheet("""
@@ -9075,6 +9240,17 @@ class SettingsWindow(QDialog):
         self.proxy_start_combo.setCurrentIndex(max(0, proxy_index))
         self.proxy_start_combo.blockSignals(False)
 
+        macro_key = str(self.owner.settings.value("macros/stop_hotkey", "F8") or "F8")
+        self.macro_stop_button.setText(macro_key)
+
+    def save_macro_stop_key(self, _checked=False):
+        current = str(self.owner.settings.value("macros/stop_hotkey", "F8") or "F8")
+        key, ok = _lelsploit_macros.record_key(self, self.owner, "Record macro stop key", current)
+        if not ok:
+            return
+        self.owner.macro_hotkey_service.set_key(key)
+        self.macro_stop_button.setText(key)
+
     def pick_syntax_color(self, key, default):
         chosen = QColorDialog.getColor(QColor(self.owner.syntax_color(key, default)), self, "Syntax color")
         if chosen.isValid():
@@ -9101,6 +9277,19 @@ class SettingsWindow(QDialog):
         value = self.proxy_start_combo.currentData()
         if value:
             self.owner.set_proxy_start_behavior(value)
+
+    def erase_generated(self, kind):
+        title = 'Erase Logs' if kind == 'logs' else 'Erase Workspace'
+        description = ('Delete the logs folder and all .log files anywhere under LelSploit app data?'
+                       if kind == 'logs' else 'Delete the workspace folder and all its contents?')
+        if QMessageBox.question(self, title, description, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes:
+            return
+        errors = erase_generated_files(APPDATA_DIR, kind)
+        if errors:
+            QMessageBox.warning(self, title, 'Some files could not be removed:\n' + '\n'.join(errors[:8]))
+        else:
+            QMessageBox.information(self, title, 'Logs erased.' if kind == 'logs' else 'Workspace erased.')
 
     def erase_data(self):
         box = QMessageBox(self)
@@ -9423,9 +9612,31 @@ _lelsploit_fastflags.configure_host(globals())
 FastFlagsWindow = _lelsploit_fastflags.FastFlagsWindow
 
 
+class ButtonToolTipFilter(QObject):
+    """Suppress hover help for all existing and future application buttons."""
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.ToolTip:
+            widget = watched if isinstance(watched, QWidget) else None
+            while widget is not None:
+                if isinstance(widget, (QAbstractButton, BrightCheckBox, QTabBar, QMenu)):
+                    QToolTip.hideText()
+                    event.accept()
+                    return True
+                widget = widget.parentWidget()
+        return False
+
+
+def install_button_tooltip_filter():
+    app = QApplication.instance()
+    if app is not None and not hasattr(app, '_lelsploit_button_tooltip_filter'):
+        app._lelsploit_button_tooltip_filter = ButtonToolTipFilter(app)
+        app.installEventFilter(app._lelsploit_button_tooltip_filter)
+
+
 class LelSploitWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        install_button_tooltip_filter()
         self.setWindowTitle("LelSploit")
         self.resize(900, 640)
         self.setMinimumSize(660, 460)
@@ -9451,6 +9662,7 @@ class LelSploitWindow(QMainWindow):
         self.settings_window = None
         self.fastflags_window = None
         self.extensions_window = None
+        self.macros_window = None
         self.documentation_window = None
         self.extension_smooth_scroll = SmoothScrollService(self)
         self.extension_window_resize = ExtensionWindowResizeService(self)
@@ -9461,6 +9673,9 @@ class LelSploitWindow(QMainWindow):
         self._extension_started_ids = set()
         self._extension_shortcuts = []
         self.settings = JsonSettings(SETTINGS_PATH)
+        self.macro_hotkey_service = _lelsploit_macros.MacroStopHotkeyService(self, self)
+        self.macro_hotkey_service.macroActivated.connect(self._run_macro_hotkey)
+        self.macro_hotkey_service.activated.connect(lambda: self.macros_window.stop_running_macro() if self.macros_window else None)
         self.capture_exclusion_service = CaptureExclusionService(self)
         self.appearance_manager = AppearanceManager(self)
         self.visual_wizard_service = VisualWizardService(self)
@@ -9522,6 +9737,15 @@ class LelSploitWindow(QMainWindow):
         self.extensions_button.setFixedSize(36, 36)
         self.extensions_button.clicked.connect(self.open_extensions)
         self.set_button_icon(self.extensions_button, "extensions")
+        self.macros_button = QPushButton()
+        self.macros_button.setObjectName("iconButton")
+        self.macros_button.setFixedSize(36, 36)
+        self.macros_button.clicked.connect(self.open_macros)
+        macro_icon = QIcon(str(ICON_DIR / "macro.png"))
+        if not macro_icon.isNull():
+            self.macros_button.setIcon(macro_icon)
+            self.macros_button.setIconSize(QSize(19, 19))
+        self.macros_button.setToolTip("Macros")
         self.visual_wizard_button = QPushButton()
         self.visual_wizard_button.setObjectName("iconButton")
         self.visual_wizard_button.setFixedSize(36, 36)
@@ -9546,7 +9770,7 @@ class LelSploitWindow(QMainWindow):
         editor_actions = QWidget(self.editor_tabs)
         editor_actions.setObjectName("editorActions")
         editor_actions.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        editor_actions.setStyleSheet("background: transparent; border: none;")
+        editor_actions.setStyleSheet("QWidget#editorActions { background: transparent; border: none; }")
         editor_actions_layout = QHBoxLayout(editor_actions)
         editor_actions_layout.setContentsMargins(0, 0, 2, 2)
         editor_actions_layout.setSpacing(4)
@@ -9602,7 +9826,7 @@ class LelSploitWindow(QMainWindow):
         icon_size = int(ui_config("buttons", "icon_size", 34))
         icon_button_size = QSize(icon_size, icon_size)
         for button, icon_name in (
-            (self.execute_button, "execute"),
+            (self.execute_button, "run"),
             (self.open_button, "file"),
             (self.save_button, "file"),
             (self.reattach_button, "attach"),
@@ -9634,9 +9858,10 @@ class LelSploitWindow(QMainWindow):
         self.header_layout = right_top
         right_top.setContentsMargins(0, 0, 0, 0)
         right_top.setSpacing(int(ui_config("buttons", "spacing", 5)))
-        right_top.addWidget(self.visual_wizard_button)
         right_top.addWidget(self.extensions_button)
+        right_top.addWidget(self.macros_button)
         right_top.addWidget(self.fastflags_button)
+        right_top.addWidget(self.visual_wizard_button)
         right_top.addWidget(self.tools_button)
         right_top.addWidget(self.documentation_button)
         right_top.addWidget(self.settings_button)
@@ -9696,6 +9921,14 @@ class LelSploitWindow(QMainWindow):
                 padding: 2px 7px 2px 10px; margin: 0px 3px 2px 0;
                 background: {tab_bg}; color: {tab_text}; border: none; border-radius: {tab_radius}px;
             }}
+            QTabWidget#editorTabs QTabBar QToolButton {{
+                background: {tab_bg}; color: {tab_text}; border: none;
+                border-radius: 4px; padding: 0; margin: 2px 1px;
+            }}
+            QTabWidget#editorTabs QTabBar QToolButton:hover {{ background: {tab_selected}; }}
+            QTabWidget#editorTabs QTabBar QToolButton:pressed {{ background: {tab_hover}; }}
+            QTabWidget#editorTabs QTabBar QToolButton:disabled {{ color: #62686c; background: {tab_bg}; }}
+            QTabWidget#editorTabs QTabBar::scroller {{ width: 48px; }}
             QTabWidget#editorTabs QTabBar::tab:hover {{ background: {tab_hover}; color: {tab_text}; }}
             QTabWidget#editorTabs QTabBar::tab:selected {{ background: {tab_selected}; color: {tab_text}; }}
             QPushButton#tabAddButton, QPushButton#tabHoverClose {{
@@ -9705,6 +9938,16 @@ class LelSploitWindow(QMainWindow):
             QPushButton#tabHoverClose:hover, QPushButton#tabHoverClose:pressed {{
                 background: transparent; border: none;
             }}
+        """)
+        self.editor_tabs._editor_bar.new_button.setStyleSheet(f"""
+            QPushButton#tabAddButton {{
+                min-width: 24px; max-width: 24px; min-height: 24px; max-height: 24px;
+                padding: 0; margin: 0; border: none; border-radius: 4px;
+                background: transparent;
+            }}
+            QPushButton#tabAddButton:hover {{ background: {tab_selected}; }}
+            QPushButton#tabAddButton:pressed {{ background: {tab_hover}; }}
+            QPushButton#tabAddButton:disabled {{ background: transparent; }}
         """)
         self.editor_tabs._editor_bar.setDrawBase(False)
         
@@ -9926,7 +10169,7 @@ class LelSploitWindow(QMainWindow):
         open_action.triggered.connect(self.restore_from_tray)
         menu.addSeparator()
         execute_action = menu.addAction("Execute current script")
-        execute_action.setIcon(app_icon("execute"))
+        execute_action.setIcon(app_icon("run"))
         execute_action.triggered.connect(self.execute)
         attach_action = menu.addAction("Attach / Reattach")
         attach_action.setIcon(app_icon("attach"))
@@ -9969,7 +10212,7 @@ class LelSploitWindow(QMainWindow):
     def hide_to_tray(self, show_notice=True):
         self._tray_main_state = self.windowState()
         self._tray_visible_windows = []
-        for name in ("scriptblox_window", "tools_window", "settings_window", "fastflags_window", "documentation_window"):
+        for name in ("scriptblox_window", "tools_window", "settings_window", "fastflags_window", "macros_window", "documentation_window"):
             window = getattr(self, name, None)
             if window is not None and window.isVisible():
                 self._tray_visible_windows.append(name)
@@ -11394,8 +11637,6 @@ class LelSploitWindow(QMainWindow):
             return
         if self.scriptblox_window is None:
             self.scriptblox_window = ScriptBloxWindow(self, self.install_script)
-        else:
-            self.scriptblox_window.prefill_current_game()
         self.scriptblox_window.show()
         self.scriptblox_window.raise_()
         self.scriptblox_window.activateWindow()
@@ -11441,6 +11682,27 @@ class LelSploitWindow(QMainWindow):
             self.extensions_window = None
             self.log(f"Could not open Extensions: {exc}", "warning")
             QMessageBox.warning(self, "Extensions", f"Could not open Extensions.\n\n{exc}")
+
+    def _run_macro_hotkey(self, macro_id):
+        if self.macros_window is None:
+            self.macros_window = MacrosWindow(self)
+        self.macros_window.run_installed_hotkey(macro_id)
+
+    def open_macros(self):
+        if self._toggle_window(self.macros_window):
+            return
+        try:
+            if self.macros_window is None:
+                self.macros_window = MacrosWindow(self)
+            else:
+                self.macros_window.refresh_installed()
+            self.macros_window.show()
+            self.macros_window.raise_()
+            self.macros_window.activateWindow()
+        except Exception as exc:
+            self.macros_window = None
+            self.log(f"Could not open Macros: {exc}", "warning")
+            QMessageBox.warning(self, "Macros", f"Could not open Macros.\n\n{exc}")
 
     def open_settings(self):
         if self._toggle_window(self.settings_window):
@@ -12238,7 +12500,18 @@ class LelSploitWindow(QMainWindow):
     def api_worker(self):
         api = None
         while not self.stopping.is_set():
-            request = self.requests.get()
+            try:
+                request = self.requests.get(timeout=1.0)
+            except queue.Empty:
+                # Keep API calls on this worker, serialized with attach/execute/detach.
+                # Do not initialize the API merely to inspect its status.
+                try:
+                    attached = bool(api is not None and api.is_attached())
+                except Exception:
+                    # A failed probe is not evidence of a detach; retry next second.
+                    continue
+                self.events.put(("attachment_status", attached))
+                continue
             if request is None:
                 return
             if len(request) == 3:
@@ -12273,6 +12546,14 @@ class LelSploitWindow(QMainWindow):
                 payload = None
                 self.events.put(("done", (action, succeeded, cancelled, cancel)))
 
+    def handle_attachment_status(self, attached):
+        # An idle probe can arrive just after the user starts another operation.
+        # Preserve its progress label and wait for its completion or the next probe.
+        if self.busy or self._pending_api_after_restart is not None:
+            return
+        if bool(attached) != bool(self.api_attached):
+            self.set_connection_state(bool(attached))
+
     def poll_api(self):
         for _ in range(100):
             try:
@@ -12281,6 +12562,8 @@ class LelSploitWindow(QMainWindow):
                 break
             if kind == "log":
                 self.log(value)
+            elif kind == "attachment_status":
+                self.handle_attachment_status(value)
             else:
                 if len(value) == 4:
                     action, succeeded, cancelled, cancel = value
@@ -12288,6 +12571,8 @@ class LelSploitWindow(QMainWindow):
                     action, succeeded = value
                     cancelled = False
                     cancel = None
+                if action == "execute":
+                    self._macro_script_succeeded = bool(succeeded and not cancelled)
                 self.busy = False
                 self.execute_button.setText("Execute")
                 self.update_editor_action_state()
@@ -12422,5 +12707,3 @@ def main():
     except Exception as exc:
         _report_startup_error(exc)
         return 1
-
-

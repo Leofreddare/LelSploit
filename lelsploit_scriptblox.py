@@ -4,6 +4,7 @@
 
 
 import html
+from concurrent.futures import ThreadPoolExecutor
 import json
 import queue
 import re
@@ -15,13 +16,14 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+import lelsploit_roblox_games as _roblox_games
 
-from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QRectF, QPoint, QObject, pyqtSignal, QPropertyAnimation, QEasingCurve
+from PyQt6.QtCore import Qt, QTimer, QSize, QEvent, QRectF, QPoint, QObject, pyqtSignal, QPropertyAnimation, QEasingCurve, QModelIndex
 from PyQt6.QtGui import (
-    QAction, QColor, QFont, QIcon, QPixmap, QKeySequence, QShortcut, QTextCharFormat, QTextCursor, QTextDocument, QPainter, QPainterPath, QRegion, QSyntaxHighlighter,
+    QStandardItem, QStandardItemModel, QAction, QColor, QFont, QIcon, QPixmap, QKeySequence, QShortcut, QTextCharFormat, QTextCursor, QTextDocument, QPainter, QPainterPath, QRegion, QSyntaxHighlighter,
 )
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFrame, QInputDialog,
+    QCompleter, QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFrame, QInputDialog,
     QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
     QPushButton, QScrollArea, QStackedWidget, QTabWidget, QTabBar, QTextBrowser, QVBoxLayout, QWidget, QGraphicsOpacityEffect, QButtonGroup,
     QListWidget, QListWidgetItem, QAbstractItemView, QAbstractScrollArea, QSystemTrayIcon, QSpinBox, QSlider, QHeaderView, QTableWidget, QTableWidgetItem,
@@ -574,6 +576,16 @@ class ScriptBloxWindow(QDialog):
         self.saved_only = False
         self.browse_state = None
         self.auto_place_id = None
+        self.selected_game = None
+        self.game_generation = 0
+        self.game_result_generation = -1
+        self.game_preview_cache = {}
+        self.game_icon_cache = {}
+        self.game_user_override = False
+        self.game_lookup_busy = False
+        self.game_lookup_pending = False
+        self.game_icon_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="RobloxIcons")
+        self.game_icon_future = None
         self.setWindowTitle("ScriptBlox")
         self.resize(720, 560)
         self.setMinimumSize(560, 400)
@@ -593,16 +605,16 @@ class ScriptBloxWindow(QDialog):
         back_row.addStretch(1)
         layout.addLayout(back_row)
         searches = QHBoxLayout()
-        self.search = QLineEdit()
+        self.search = SearchLineEdit()
         self.search.setPlaceholderText("Search scripts...")
         self.search.setClearButtonEnabled(True)
         self.search.returnPressed.connect(self.refresh)
         searches.addWidget(self.search, 1)
 
-        self.game_search = QLineEdit()
+        self.game_search = SearchLineEdit()
         self.game_search.setPlaceholderText("Search games or place ID...")
         self.game_search.setClearButtonEnabled(True)
-        self.game_search.returnPressed.connect(self.refresh)
+        self.game_search.returnPressed.connect(self._game_entered)
         searches.addWidget(self.game_search, 1)
         layout.addLayout(searches)
 
@@ -663,7 +675,19 @@ class ScriptBloxWindow(QDialog):
         self.search_timer.setInterval(650)
         self.search_timer.timeout.connect(self.refresh)
         self.search.textChanged.connect(lambda: self.search_timer.start())
-        self.game_search.textChanged.connect(lambda: self.search_timer.start())
+        self.game_timer = QTimer(self)
+        self.game_timer.setSingleShot(True)
+        self.game_timer.setInterval(350)
+        self.game_timer.timeout.connect(self._lookup_game)
+        self.game_model = QStandardItemModel(self)
+        self.game_completer = QCompleter(self.game_model, self)
+        self.game_completer.setWidget(self.game_search)
+        self.game_completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        self.game_completer.setMaxVisibleItems(6)
+        self.game_completer.popup().setIconSize(QSize(40, 40))
+        self.game_completer.popup().setStyleSheet('QListView { background: #131517; color: #eeeeee; border: 1px solid #333; } QListView::item { padding: 5px; } QListView::item:selected { background: #303740; }')
+        self.game_completer.activated[QModelIndex].connect(self._choose_game)
+        self.game_search.textEdited.connect(self._game_edited)
         self.poll_timer = QTimer(self)
         self.poll_timer.setInterval(50)
         self.poll_timer.timeout.connect(self.poll_events)
@@ -690,31 +714,193 @@ class ScriptBloxWindow(QDialog):
             QScrollArea > QWidget > QWidget { background: transparent; }
         """)
         apply_blur_style(self)
-        self.prefill_current_game(refresh_on_change=False)
-        QTimer.singleShot(0, self.refresh)
 
-    def prefill_current_game(self, refresh_on_change=True):
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not event.spontaneous():
+            self.prefill_current_game(refresh_on_change=False, force=True)
+            self.refresh()
+
+    def _game_place_filter(self):
+        if self.selected_game and self.game_search.text() == self.selected_game['name']:
+            return self.selected_game['place_id']
+        return _roblox_games.place_id(self.game_search.text())
+
+    def _game_edited(self, text):
+        self.game_generation += 1
+        self.request_id += 1  # Ignore ScriptBlox results for the old game.
+        self.selected_game = None
+        self.game_user_override = True
+        self.auto_place_id = None
+        self._show_game_previews(text)
+        self.status.clear()
+        self.game_search.setToolTip('Search Roblox experiences or paste a place ID.')
+        self.game_timer.stop()
+        self.game_lookup_pending = False
+        self.search_timer.stop()
+        self.next_page = None
+        self.load_more_button.hide()
+        self.set_filters_enabled(True)
+        if not text.strip() or _roblox_games.place_id(text):
+            self.search_timer.start()
+        if len(text.strip()) >= 2 or _roblox_games.place_id(text):
+            self.game_timer.start(350)
+
+    def _game_entered(self):
+        if self._game_place_filter() or not self.game_search.text().strip():
+            self.refresh()
+        else:
+            self.game_timer.stop()
+            self._lookup_game()
+
+    def _lookup_game(self):
         if self.saved_only:
-            return False
-        current = self.game_search.text().strip()
-        if current and current != (self.auto_place_id or ""):
+            return
+        query = self.game_search.text().strip()
+        if not query or (self.selected_game and query == self.selected_game['name']):
+            return
+        if self.game_lookup_busy:
+            self.game_lookup_pending = True
+            return
+        self.game_lookup_busy = True
+        self.game_lookup_pending = False
+        generation = self.game_generation
+        numeric = _roblox_games.place_id(query)
+        def worker():
+            try:
+                games = [_roblox_games.resolve_place(numeric)] if numeric else _roblox_games.search_games(query)
+                self.events.put(('roblox_games', generation, {'query': query, 'numeric': bool(numeric), 'games': games}))
+                # Display names immediately; fill thumbnails without delaying selection.
+                if self.game_icon_future is not None:
+                    self.game_icon_future.cancel()
+                def fetch_icons():
+                    icons = _roblox_games.game_icons(games)
+                    if icons:
+                        self.events.put(('roblox_icons', generation, icons))
+                self.game_icon_future = self.game_icon_pool.submit(fetch_icons)
+            except Exception as exc:
+                self.events.put(('roblox_games_error', generation, str(exc)))
+            finally:
+                self.events.put(('roblox_lookup_done', generation, None))
+        threading.Thread(target=worker, daemon=True, name='RobloxGameSearch').start()
+
+    def _display_game(self, game):
+        self.selected_game = dict(game)
+        self.game_search.setText(game['name'])
+        self.game_search.setToolTip(f"{game['name']} — place ID {game['place_id']}")
+        self.game_completer.popup().hide()
+
+    def _choose_game(self, index):
+        game = index.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(game, dict):
+            return
+        self.game_timer.stop()
+        self.game_lookup_pending = False
+        self.game_generation += 1
+        self.game_user_override = True
+        self.auto_place_id = None
+        self._display_game(game)
+        self.refresh()
+
+    def _show_game_suggestions(self, games):
+        self.game_model.clear()
+        for game in games[:6]:
+            item = QStandardItem(game['name'])
+            item.setData(dict(game), Qt.ItemDataRole.UserRole)
+            item.setToolTip(f"Place ID {game['place_id']}")
+            item.setSizeHint(QSize(310, 50))
+            item.setIcon(self.game_icon_cache.get(game['universe_id'], app_icon('roblox')))
+            self.game_model.appendRow(item)
+        if games and self.game_search.hasFocus() and self.isVisible():
+            self.game_completer.setCompletionPrefix('')
+            self.game_completer.complete()
+        elif not games:
+            self.game_completer.popup().hide()
+
+    def _show_game_previews(self, text):
+        query = text.strip().casefold()
+        games, seen = [], set()
+        if len(query) >= 2 and not _roblox_games.place_id(text):
+            # Reuse matching names and their icons immediately, newest data first.
+            for rows in reversed(list(self.game_preview_cache.values())):
+                for game in rows:
+                    key = game['universe_id']
+                    if key not in seen and all(word in game['name'].casefold() for word in query.split()):
+                        seen.add(key)
+                        games.append(game)
+                        if len(games) == 6:
+                            break
+                if len(games) == 6:
+                    break
+        self._show_game_suggestions(games)
+
+    def _accept_game_results(self, generation, payload):
+        games = payload['games'][:6]
+        if payload['numeric']:
+            if generation == self.game_generation and not self.saved_only:
+                if games and _roblox_games.place_id(self.game_search.text()) == games[0]['place_id']:
+                    self._display_game(games[0])
+            return
+        cache_key = payload['query'].strip().casefold()
+        self.game_preview_cache.pop(cache_key, None)
+        self.game_preview_cache[cache_key] = [dict(game) for game in games]
+        while len(self.game_preview_cache) > 24:
+            self.game_preview_cache.pop(next(iter(self.game_preview_cache)))
+        if self.saved_only or self.selected_game:
+            return
+        if generation == self.game_generation and self.game_search.text().strip() == payload['query']:
+            self.game_result_generation = generation
+            self._show_game_suggestions(games)
+        elif self.game_result_generation != self.game_generation:
+            # A late 'door' response may preview 'doors', but must never replace
+            # the authoritative response for the current query or change its ID.
+            self._show_game_previews(self.game_search.text())
+
+    def _accept_game_icons(self, generation, icons):
+        # Icons are keyed by universe ID, so older responses can safely fill
+        # matching preview rows without changing names, ranking, or selection.
+        for key, data in icons.items():
+            pixmap = QPixmap()
+            if pixmap.loadFromData(data):
+                self.game_icon_cache.pop(key, None)
+                self.game_icon_cache[key] = QIcon(pixmap)
+        while len(self.game_icon_cache) > 144:
+            self.game_icon_cache.pop(next(iter(self.game_icon_cache)))
+        if self.saved_only:
+            return
+        for row in range(self.game_model.rowCount()):
+            item = self.game_model.item(row)
+            game = item.data(Qt.ItemDataRole.UserRole)
+            icon = self.game_icon_cache.get(game['universe_id'])
+            if icon is not None:
+                item.setIcon(icon)
+
+    def prefill_current_game(self, refresh_on_change=True, force=False):
+        if not force and (self.saved_only or self.game_user_override):
             return False
         try:
-            place_id = current_roblox_place_id()
+            detected = _roblox_games.place_id(current_roblox_place_id())
         except Exception:
             return False
-        if not place_id:
+        if not detected or (not force and detected == self.auto_place_id):
             return False
-        place_id = str(place_id)
-        changed = current != place_id
-        self.auto_place_id = place_id
-        if changed:
-            self.game_search.blockSignals(True)
-            self.game_search.setText(place_id)
-            self.game_search.blockSignals(False)
-            if refresh_on_change:
-                QTimer.singleShot(0, self.refresh)
-        return changed
+        self.game_user_override = False
+        self.auto_place_id = detected
+        self.selected_game = None
+        self.game_generation += 1
+        self.game_model.clear()
+        self.game_completer.popup().hide()
+        if self.saved_only:
+            # Keep Saved Scripts open; refresh the game field restored on Back.
+            if self.browse_state is not None:
+                self.browse_state['game_search'] = detected
+            return True
+        self.game_search.setText(detected)
+        self.game_search.setToolTip(f'Place ID {detected}; resolving game name…')
+        self.game_timer.start()
+        if refresh_on_change:
+            QTimer.singleShot(0, self.refresh)
+        return True
 
     def refresh(self, *_):
         self.search_timer.stop()
@@ -724,6 +910,11 @@ class ScriptBloxWindow(QDialog):
         if self.saved_only:
             self.refresh_saved()
             return
+        if self.game_search.text().strip() and not self._game_place_filter():
+            self.request_id += 1
+            self.set_filters_enabled(True)
+            self.status.clear()
+            return
         self.request_page(1, append=False)
 
     def set_saved_only(self, enabled):
@@ -732,6 +923,10 @@ class ScriptBloxWindow(QDialog):
             return
 
         self.search_timer.stop()
+        self.game_timer.stop()
+        self.game_generation += 1
+        self.game_lookup_pending = False
+        self.game_completer.popup().hide()
         if enabled:
             self.browse_state = {
                 "search": self.search.text(),
@@ -769,6 +964,8 @@ class ScriptBloxWindow(QDialog):
         self.load_more_button.hide()
         self.load_more_button.setEnabled(False)
         self.refresh()
+        if not enabled and self.game_search.text().strip() and not self.selected_game:
+            self.game_timer.start()
 
     def refresh_saved(self):
         scripts = list(self.saved_scripts.values())
@@ -790,7 +987,7 @@ class ScriptBloxWindow(QDialog):
         threading.Thread(
             target=fetch_scriptblox,
             args=(self.events, request_id, self.search.text(),
-                  self.game_search.text(), self.sort.currentData(),
+                  self._game_place_filter(), self.sort.currentData(),
                   self.keyless.isChecked(), page, append),
             daemon=True,
         ).start()
@@ -932,7 +1129,19 @@ class ScriptBloxWindow(QDialog):
                 kind, first, second = self.events.get_nowait()
             except queue.Empty:
                 break
-            if kind == "catalog":
+            if kind == 'roblox_games':
+                self._accept_game_results(first, second)
+            elif kind == 'roblox_icons':
+                self._accept_game_icons(first, second)
+            elif kind == 'roblox_games_error':
+                if first == self.game_generation and not self.saved_only:
+                    self.game_search.setToolTip('Roblox game lookup failed: ' + second)
+            elif kind == 'roblox_lookup_done':
+                self.game_lookup_busy = False
+                if self.game_lookup_pending and not self.saved_only:
+                    self.game_lookup_pending = False
+                    self.game_timer.start(0)
+            elif kind == "catalog":
                 if first == self.request_id:
                     self.set_filters_enabled(True)
                     self.next_page = second["next_page"]
