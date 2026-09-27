@@ -9423,7 +9423,8 @@ class ModificationSourceRow(QFrame):
         self.name_label.setMinimumWidth(145)
         self.name_label.setMaximumWidth(190)
         row.addWidget(self.name_label)
-        self.status = QLabel("Not Set")
+        self.status = QLabel("")
+        self.status.hide()
         self.status.setObjectName("modStatus")
         self.status.setFixedWidth(58)
         row.addWidget(self.status)
@@ -9447,7 +9448,7 @@ class ModificationSourceRow(QFrame):
         self.source.blockSignals(True)
         self.source.setText(str(entry.get("source", "")) if entry else "")
         self.source.blockSignals(False)
-        self.status.setText("Applied" if entry else "Not Set")
+        self.status.setText("")
         self.status.setProperty("applied", bool(entry))
         self.status.style().unpolish(self.status)
         self.status.style().polish(self.status)
@@ -10013,13 +10014,13 @@ class LelSploitWindow(QMainWindow):
         threading.Thread(target=self.api_worker, daemon=True).start()
 
     def close_behavior(self):
-        value = str(self.settings.value("application/close_behavior", "tray") or "tray").strip().casefold()
-        return value if value in {"tray", "exit"} else "tray"
+        value = str(self.settings.value("application/close_behavior", "exit") or "exit").strip().casefold()
+        return value if value in {"tray", "exit"} else "exit"
 
     def set_close_behavior(self, value):
-        value = str(value or "tray").strip().casefold()
+        value = str(value or "exit").strip().casefold()
         if value not in {"tray", "exit"}:
-            value = "tray"
+            value = "exit"
         self.settings.setValue("application/close_behavior", value)
         self.settings.sync()
 
@@ -12676,6 +12677,33 @@ def _report_startup_error(exc):
             pass
 
 
+class PopupStyleFilter(QObject):
+    """Style all Qt message boxes, including static convenience dialogs."""
+    def eventFilter(self, watched, event):
+        if isinstance(watched, QMessageBox) and event.type() == QEvent.Type.Show:
+            warning = watched.icon() in (QMessageBox.Icon.Warning, QMessageBox.Icon.Critical)
+            path = ICON_DIR / "popups" / ("warning.png" if warning else "info.png")
+            pixmap = QPixmap(str(path))
+            watched.setIcon(QMessageBox.Icon.NoIcon)
+            if not pixmap.isNull():
+                watched.setIconPixmap(pixmap.scaled(40, 40, Qt.AspectRatioMode.KeepAspectRatio,
+                                                    Qt.TransformationMode.SmoothTransformation))
+                watched.setWindowIcon(QIcon(str(path)))
+            watched.setStyleSheet("""
+                QMessageBox { background:#14171d; color:#edf0f5; }
+                QMessageBox QLabel { color:#edf0f5; background:transparent; font-size:13px; min-height:28px; }
+                QMessageBox QLabel#qt_msgbox_label { font-weight:600; }
+                QMessageBox QLabel#qt_msgbox_informativelabel { color:#adb7c6; font-weight:400; }
+                QMessageBox QPushButton { background:#242c38; color:#edf0f5; border:1px solid #3e4b5e;
+                    border-radius:7px; padding:8px 18px; min-width:72px; }
+                QMessageBox QPushButton:hover { background:#344256; border-color:#647d9e; }
+                QMessageBox QPushButton:default { background:#354e70; border-color:#789ac6; }
+            """)
+            watched.layout().setContentsMargins(22, 20, 22, 18)
+            watched.layout().setSpacing(14)
+        return super().eventFilter(watched, event)
+
+
 def main():
     try:
         configure_windows_identity()
@@ -12687,6 +12715,8 @@ def main():
             app.setDesktopFileName("LelSploit")
         app.setQuitOnLastWindowClosed(False)
         app.setStyle("Fusion")
+        app.popup_style_filter = PopupStyleFilter(app)
+        app.installEventFilter(app.popup_style_filter)
         icon = lelsploit_icon()
         if not icon.isNull():
             app.setWindowIcon(icon)

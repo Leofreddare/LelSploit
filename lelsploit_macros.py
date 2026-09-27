@@ -12,7 +12,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QSize, QObject, pyqtSignal, QMimeData, QPropertyAnimation, QEasingCurve, QRectF, QEvent
+from PyQt6.QtCore import Qt, QTimer, QSize, QObject, pyqtSignal, QMimeData, QPropertyAnimation, QVariantAnimation, QEasingCurve, QRectF, QEvent
 from PyQt6.QtGui import QIcon, QColor, QBrush, QDrag, QPixmap, QPen, QPainter
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QHeaderView,
+    QLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -252,6 +253,16 @@ def hotkey_parts(value):
     if value not in _KEY_CODES or len(parts) != len(set(parts)):
         raise ValueError("Unsupported hotkey.")
     return parts + [value]
+
+
+class IssueStatusLabel(QLabel):
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setText("" if text.startswith("Loading") else text)
+
+    def setText(self, text):
+        super().setText(text)
+        self.setVisible(bool(text))
 
 
 class KeyRecorderDialog(QDialog):
@@ -899,46 +910,74 @@ def _block_summary(data):
     return op or "Block"
 
 
-class BlockPalette(QListWidget):
+class PaletteActionButton(QPushButton):
+    """An action button with drag support and no internal scrolling viewport."""
+    def __init__(self, op, icon, label, parent=None):
+        super().__init__(icon, label, parent)
+        self.op = op
+        self._drag_origin = None
+        self.setCheckable(True)
+        self.setMinimumHeight(36)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_origin = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (self._drag_origin is not None and event.buttons() & Qt.MouseButton.LeftButton
+                and (event.position().toPoint() - self._drag_origin).manhattanLength() >= 10):
+            self._drag_origin = None
+            self.setDown(False)
+            self.setChecked(True)
+            mime = QMimeData()
+            mime.setData(BLOCK_MIME, self.op.encode("utf-8"))
+            drag = QDrag(self)
+            drag.setMimeData(mime)
+            drag.exec(Qt.DropAction.CopyAction)
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_origin = None
+        super().mouseReleaseEvent(event)
+
+
+class BlockPalette(QWidget):
     blockActivated = pyqtSignal(str)
 
     def __init__(self, category, parent=None):
         super().__init__(parent)
         self.category = category
-        self.setDragEnabled(True)
-        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.setSpacing(2)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setObjectName("macroBlockPalette")
+        self.setObjectName("macroActionPalette")
+        self.actions_layout = QVBoxLayout(self)
+        self.actions_layout.setContentsMargins(5, 5, 5, 5)
+        self.actions_layout.setSpacing(4)
+        self.actions_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.buttons = QButtonGroup(self)
+        self.buttons.setExclusive(True)
         category_icon = _builder_icon(category)
         for op, definition in BLOCK_DEFS.items():
             if definition["category"] != category:
                 continue
-            item = QListWidgetItem(category_icon, definition["label"])
-            item.setData(Qt.ItemDataRole.UserRole, op)
-            item.setToolTip(definition["description"])
-            item.setBackground(QBrush(CATEGORY_COLORS[category]))
-            item.setForeground(QBrush(QColor("#ffffff")))
-            item.setSizeHint(QSize(170, 30))
-            self.addItem(item)
-        self.itemClicked.connect(lambda item: self.blockActivated.emit(str(item.data(Qt.ItemDataRole.UserRole))))
+            button = PaletteActionButton(op, category_icon, definition["label"], self)
+            button.setToolTip(definition["description"])
+            button.setObjectName("macroPaletteAction")
+            button.setStyleSheet("""
+                QPushButton { text-align:left; background:#19222d; color:#edf1f5;
+                    border:1px solid #35404d; border-radius:6px; padding:7px 9px; }
+                QPushButton:hover { background:#25313f; }
+                QPushButton:checked { background:#344252; border-color:#617386; }
+            """)
+            self.buttons.addButton(button)
+            button.clicked.connect(lambda checked=False, action=op: self.blockActivated.emit(action))
+            self.actions_layout.addWidget(button)
 
     def preferred_height(self):
-        return max(46, sum(max(30, self.sizeHintForRow(i)) + 2 * self.spacing() for i in range(self.count())) + 18)
-
-    def startDrag(self, supported_actions):
-        item = self.currentItem()
-        if item is None:
-            return
-        op = str(item.data(Qt.ItemDataRole.UserRole) or "")
-        if op not in BLOCK_DEFS:
-            return
-        mime = QMimeData()
-        mime.setData(BLOCK_MIME, op.encode("utf-8"))
-        drag = QDrag(self)
-        drag.setMimeData(mime)
-        drag.exec(Qt.DropAction.CopyAction)
+        self.ensurePolished()
+        self.actions_layout.invalidate()
+        # Layout hints include the styled buttons' actual minimum heights.
+        return self.actions_layout.sizeHint().height()
 
 
 class MacroCategorySection(QWidget):
@@ -947,10 +986,27 @@ class MacroCategorySection(QWidget):
         self.category = category
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self.button = QPushButton("▸  " + category)
+        self.button.setObjectName("macroCategoryButton")
+        self.button.setIcon(_builder_icon(category))
+        self.button.setCheckable(True)
+        root.addWidget(self.button)
         self.palette = BlockPalette(category)
-        self.palette.setFixedHeight(self.palette.preferred_height())
+        self.palette.setFixedHeight(0)
         root.addWidget(self.palette)
-        root.addStretch(1)
+        self.animation = QVariantAnimation(self)
+        self.animation.valueChanged.connect(lambda height: self.palette.setFixedHeight(int(height)))
+        self.animation.setDuration(200)
+        self.animation.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        self.button.toggled.connect(self.set_expanded)
+
+    def set_expanded(self, expanded):
+        self.animation.stop()
+        self.button.setText(("▾  " if expanded else "▸  ") + self.category)
+        self.animation.setStartValue(self.palette.height())
+        self.animation.setEndValue(self.palette.preferred_height() if expanded else 0)
+        self.animation.start()
 
 
 class MacroBlockDelegate(QStyledItemDelegate):
@@ -963,7 +1019,7 @@ class MacroBlockDelegate(QStyledItemDelegate):
         rect = option.rect.adjusted(3, 3, -3, -3)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QColor("#25303b" if selected else "#1c242d" if hovered else "#131a22"))
+        painter.setBrush(QColor("#344252" if selected else "#1c242d" if hovered else "#131a22"))
         painter.setPen(QPen(QColor("#617386" if selected else "#35404d"), 1))
         painter.drawRoundedRect(QRectF(rect), 5, 5)
         content = rect.adjusted(10, 0, -32 if container else -10, 0)
@@ -1026,6 +1082,12 @@ class MacroProgramTree(QTreeWidget):
         painter.fillRect(option.rect, QColor("#090a0d"))
         block_option = QStyleOptionViewItem(option)
         block_option.rect = self.visualRect(index)
+        # drawRow runs before Qt's normal delegate option preparation. Read the
+        # selection model explicitly, including when focus is in Properties.
+        if self.selectionModel().isSelected(index):
+            block_option.state |= QStyle.StateFlag.State_Selected
+        else:
+            block_option.state &= ~QStyle.StateFlag.State_Selected
         self.itemDelegate().paint(painter, block_option, index)
 
     def mousePressEvent(self, event):
@@ -1443,20 +1505,23 @@ class MacroBuilderDialog(QDialog):
         palette_layout.setContentsMargins(10, 10, 10, 10)
         palette_layout.setSpacing(5)
         self.category_sections = []
-        self.category_selector = QComboBox()
-        self.category_selector.setMaxVisibleItems(len(CATEGORY_COLORS))
-        self.category_selector.setToolTip('Choose an action category')
-        palette_layout.addWidget(self.category_selector)
-        self.category_stack = QStackedWidget()
+        category_scroll = QScrollArea()
+        category_scroll.setWidgetResizable(True)
+        category_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        category_content = QWidget()
+        category_layout = QVBoxLayout(category_content)
+        category_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        category_layout.setContentsMargins(0, 0, 4, 0)
+        category_layout.setSpacing(6)
+        self.category_sections = []
         for category in CATEGORY_COLORS:
             section = MacroCategorySection(category)
             section.palette.blockActivated.connect(self.add_block)
             self.category_sections.append(section)
-            self.category_selector.addItem(_builder_icon(category), category)
-            self.category_stack.addWidget(section)
-        self.category_stack.setMinimumHeight(max(section.palette.preferred_height() for section in self.category_sections))
-        self.category_selector.currentIndexChanged.connect(self.category_stack.setCurrentIndex)
-        palette_layout.addWidget(self.category_stack, 1)
+            category_layout.addWidget(section)
+        category_layout.addStretch(1)
+        category_scroll.setWidget(category_content)
+        palette_layout.addWidget(category_scroll, 1)
         body.addWidget(palette_frame)
 
         center = QFrame()
@@ -1501,10 +1566,9 @@ class MacroBuilderDialog(QDialog):
         body.addWidget(props_frame)
         body.setSizes([225, 585, 240])
 
-        layout.addWidget(QLabel("Input starts after 2 seconds. Focus your target. Settings and assets may require restarting Roblox."))
         bottom = QHBoxLayout()
         bottom.addStretch(1)
-        self.status = QLabel("")
+        self.status = IssueStatusLabel("")
         self.status.hide()
         self.run_button = QPushButton("Run")
         self.stop_button = QPushButton("Stop")
@@ -1565,6 +1629,7 @@ class MacroBuilderDialog(QDialog):
             QListWidget#macroBlockPalette::item, QTreeWidget#macroProgramTree::item {
                 border-radius:6px; margin:2px; padding:7px 9px;
             }
+            QListWidget#macroBlockPalette::item:selected { background:#344252; color:#ffffff; border:1px solid #617386; }
             QTreeWidget#macroProgramTree::item, QTreeWidget#macroProgramTree::item:selected,
             QTreeWidget#macroProgramTree::item:hover { border:none; background:transparent; padding:0; margin:0; }
             QTreeWidget#macroProgramTree::branch { background:transparent; border:none; image:none; }
@@ -1823,7 +1888,7 @@ class MacroMarketplacePane(QWidget):
         filters.addStretch(1)
         layout.addLayout(filters)
 
-        self.status = QLabel("Open Marketplace to browse macros.")
+        self.status = IssueStatusLabel("")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
 
@@ -1979,7 +2044,7 @@ class MacroMarketplacePane(QWidget):
         self.search_timer.stop()
         self.request_id += 1
         rid = self.request_id
-        self.status.setText("Loading macros...")
+        self.status.setText("")
         query = self.search.text().strip()
         sort = str(self.sort.currentData() or "popular")
         token = self.token
@@ -2013,13 +2078,13 @@ class MacroMarketplacePane(QWidget):
                 self.status.setText(str(payload))
                 self.clear_results()
             elif kind == "action_ok":
-                self.status.setText(str(payload) if payload else "Done.")
+                self.status.setText("")
                 self.refresh()
             elif kind == "action_error":
                 self.status.setText(str(payload))
                 QMessageBox.warning(self, "Macro Marketplace", str(payload))
             elif kind == "installed":
-                self.status.setText(str(payload))
+                self.status.setText("")
                 window = self.window()
                 if hasattr(window, "refresh_installed"):
                     window.refresh_installed()
@@ -2045,8 +2110,7 @@ class MacroMarketplacePane(QWidget):
         cards.addStretch(1)
         self.scroll.setWidget(content)
         self.status.setText(
-            f"{len(items)} macro{'s' if len(items) != 1 else ''}" + (" · management" if self.my_only else "")
-        )
+            ""        )
 
     def build_card(self, item, favorite, manage):
         card = QFrame()
@@ -2285,12 +2349,12 @@ class MacroMarketplacePane(QWidget):
                 self.events.put(("action_error", rid, str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
-        self.status.setText("Saving changes...")
+        self.status.setText("")
 
     def install_macro(self, item):
         macro_id = urllib.parse.quote(str(item.get("id") or ""))
         rid = self.request_id
-        self.status.setText(f"Downloading {item.get('name') or 'macro'}...")
+        self.status.setText("")
 
         def worker():
             try:

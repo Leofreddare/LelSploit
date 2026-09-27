@@ -24,7 +24,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QCompleter, QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFrame, QInputDialog,
-    QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
+    QLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
     QPushButton, QScrollArea, QStackedWidget, QTabWidget, QTabBar, QTextBrowser, QVBoxLayout, QWidget, QGraphicsOpacityEffect, QButtonGroup,
     QListWidget, QListWidgetItem, QAbstractItemView, QAbstractScrollArea, QSystemTrayIcon, QSpinBox, QSlider, QHeaderView, QTableWidget, QTableWidgetItem,
 )
@@ -469,6 +469,16 @@ def fetch_scriptblox_saved_raw(output, key, script_id, slug=None):
         output.put(("save_error", key, str(exc)))
 
 
+class IssueStatusLabel(QLabel):
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setText("" if text.startswith("Loading") else text)
+
+    def setText(self, text):
+        super().setText(text)
+        self.setVisible(bool(text))
+
+
 class ScriptBloxInstallDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -652,7 +662,7 @@ class ScriptBloxWindow(QDialog):
         filters.addWidget(self.saved_button)
         layout.addLayout(filters)
 
-        self.status = QLabel("Loading scripts...")
+        self.status = IssueStatusLabel("Loading scripts...")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.status)
         self.scroll = QScrollArea()
@@ -662,11 +672,13 @@ class ScriptBloxWindow(QDialog):
         self.results_layout = QVBoxLayout(self.results)
         self.results_layout.setContentsMargins(0, 0, 0, 0)
         self.results_layout.setSpacing(8)
+        self.results_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
         self.load_more_button = QPushButton("Load More")
+        self.load_more_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.load_more_button.clicked.connect(self.load_more)
         self.load_more_button.hide()
-        self.results_layout.addStretch(1)
         self.results_layout.addWidget(self.load_more_button)
+        self.results_layout.addStretch(1)
         self.scroll.setWidget(self.results)
         layout.addWidget(self.scroll, 1)
 
@@ -980,10 +992,15 @@ class ScriptBloxWindow(QDialog):
     def request_page(self, page, append):
         self.request_id += 1
         request_id = self.request_id
-        self.status.setText("Loading more..." if append else "Loading scripts...")
-        self.set_filters_enabled(False)
-        self.load_more_button.setVisible(False)
+        self._append_position = self.scroll.verticalScrollBar().value() if append else None
+        self.status.setText("")
+        if not append:
+            self.set_filters_enabled(False)
+        self.load_more_button.setVisible(bool(append))
         self.load_more_button.setEnabled(False)
+        if append:
+            self.scroll.setFocus(Qt.FocusReason.OtherFocusReason)
+            self.scroll.verticalScrollBar().setValue(self._append_position)
         threading.Thread(
             target=fetch_scriptblox,
             args=(self.events, request_id, self.search.text(),
@@ -1002,6 +1019,7 @@ class ScriptBloxWindow(QDialog):
         self.keyless.setEnabled(active)
 
     def clear_results(self):
+        self.results.setMinimumHeight(0)
         while self.results_layout.count() > 2:
             item = self.results_layout.takeAt(0)
             widget = item.widget()
@@ -1010,6 +1028,7 @@ class ScriptBloxWindow(QDialog):
         self.load_more_button.hide()
 
     def show_scripts(self, scripts, append=False):
+        scroll_position = self.scroll.verticalScrollBar().value() if append else 0
         if not append:
             self.clear_results()
             self.loaded_keys.clear()
@@ -1055,8 +1074,14 @@ class ScriptBloxWindow(QDialog):
             )
             card_layout.addWidget(star)
             self.results_layout.insertWidget(self.results_layout.count() - 2, card)
+        self.results_layout.activate()
+        self.results.setMinimumHeight(self.results_layout.minimumSize().height())
+        self.scroll.verticalScrollBar().setValue(scroll_position)
+        generation = self.request_id
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(scroll_position)
+                          if generation == self.request_id else None)
         label = "saved scripts" if self.saved_only else "scripts"
-        self.status.setText(f"{len(self.loaded_keys)} {label}")
+        self.status.setText("")
 
     def update_star_button(self, button, starred):
         icon = app_icon("stared" if starred else "star")
@@ -1092,16 +1117,16 @@ class ScriptBloxWindow(QDialog):
             script_id = saved_item.get("_id") or saved_item.get("slug")
             code = saved_item.get("script")
             if script_id and not (isinstance(code, str) and code.strip()):
-                self.status.setText("Saving script source...")
+                self.status.setText("")
                 threading.Thread(
                     target=fetch_scriptblox_saved_raw,
                     args=(self.events, key, script_id, saved_item.get("slug")),
                     daemon=True,
                 ).start()
             else:
-                self.status.setText("Script saved.")
+                self.status.setText("")
         else:
-            self.status.setText("Removed from saved scripts.")
+            self.status.setText("")
         if self.saved_only and not starred:
             self.refresh_saved()
 
@@ -1110,13 +1135,13 @@ class ScriptBloxWindow(QDialog):
         code = script.get("script")
         if isinstance(code, str) and code.strip():
             installed = self.install_callback(code, title)
-            self.status.setText(f"Installed {title}." if installed else "Install cancelled.")
+            self.status.setText("")
             return
         script_id = script.get("_id") or script.get("slug")
         if not script_id:
             self.status.setText("This script has no downloadable source.")
             return
-        self.status.setText(f"Installing {title}...")
+        self.status.setText("")
         threading.Thread(
             target=fetch_scriptblox_raw,
             args=(self.events, script_id, title, script.get("slug")),
@@ -1158,13 +1183,13 @@ class ScriptBloxWindow(QDialog):
                     self.status.setText("Could not load scripts.")
             elif kind == "install":
                 installed = self.install_callback(second, first)
-                self.status.setText(f"Installed {first}." if installed else "Install cancelled.")
+                self.status.setText("")
             elif kind == "save":
                 if first in self.saved_scripts:
                     self.saved_scripts[first]["script"] = second
                     try:
                         save_saved_scripts(self.saved_scripts)
-                        self.status.setText("Script saved.")
+                        self.status.setText("")
                     except OSError as exc:
                         self.status.setText(f"Could not save scripts: {exc}")
             elif kind == "save_error":

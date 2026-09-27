@@ -292,6 +292,16 @@ def _marketplace_icon_file(record):
     return ("icon", name, raw, content_type)
 
 
+class IssueStatusLabel(QLabel):
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self.setText("" if text.startswith("Loading") else text)
+
+    def setText(self, text):
+        super().setText(text)
+        self.setVisible(bool(text))
+
+
 class MarketplaceAccountDialog(QDialog):
     def __init__(self, marketplace):
         super().__init__(marketplace)
@@ -314,7 +324,7 @@ class MarketplaceAccountDialog(QDialog):
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.password.returnPressed.connect(lambda: self.submit("login"))
         root.addWidget(self.password)
-        self.status = QLabel("")
+        self.status = IssueStatusLabel("")
         self.status.setWordWrap(True)
         self.status.setObjectName("extensionMeta")
         root.addWidget(self.status)
@@ -354,7 +364,7 @@ class MarketplaceAccountDialog(QDialog):
             return
         self.login.setEnabled(False)
         self.register.setEnabled(False)
-        self.status.setText("Contacting marketplace...")
+        self.status.setText("")
         base = self.marketplace.api_base
 
         def worker():
@@ -472,7 +482,7 @@ class ExtensionMarketplacePane(QWidget):
         filters.addStretch(1)
         layout.addLayout(filters)
 
-        self.status = QLabel("Open Marketplace to browse extensions.")
+        self.status = IssueStatusLabel("")
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
 
@@ -636,7 +646,7 @@ class ExtensionMarketplacePane(QWidget):
         self.search_timer.stop()
         self.request_id += 1
         rid = self.request_id
-        self.status.setText("Loading extensions...")
+        self.status.setText("")
         query = self.search.text().strip()
         sort = str(self.sort.currentData() or "popular")
         token = self.token
@@ -672,7 +682,7 @@ class ExtensionMarketplacePane(QWidget):
                 self.status.setText(str(payload))
                 self.clear_results()
             elif kind == "action_ok":
-                self.status.setText(str(payload) if payload else "Done.")
+                self.status.setText("")
                 self.refresh()
             elif kind == "action_error":
                 self.status.setText(str(payload))
@@ -687,7 +697,7 @@ class ExtensionMarketplacePane(QWidget):
                 self._market_icon_cache[key] = icon
                 self._refresh_market_icon_labels(key)
             elif kind == "installed":
-                self.status.setText(str(payload))
+                self.status.setText("")
                 self.owner.refresh_extensions_runtime()
                 window = getattr(self.owner, "extensions_window", None)
                 if window is not None:
@@ -720,9 +730,7 @@ class ExtensionMarketplacePane(QWidget):
         cards.addStretch(1)
         self.scroll.setWidget(content)
         self.status.setText(
-            f"{len(items)} extension{'s' if len(items) != 1 else ''}"
-            + (" · management" if self.my_only else "")
-        )
+            ""        )
 
     def build_card(self, item, favorite, manage):
         card = QFrame()
@@ -1047,13 +1055,13 @@ class ExtensionMarketplacePane(QWidget):
                 self.events.put(("action_error", self.request_id, str(exc)))
 
         threading.Thread(target=worker, daemon=True).start()
-        self.status.setText("Saving changes...")
+        self.status.setText("")
 
     def install_extension(self, item):
         ext_id = urllib.parse.quote(str(item.get("id") or ""))
         name = str(item.get("name") or "extension")
         base = self.api_base
-        self.status.setText(f"Downloading {name}...")
+        self.status.setText("")
 
         def worker():
             try:

@@ -554,7 +554,7 @@ class ToolsWindow(QDialog):
         self.deob_result_text = ""
         self.deob_button.setEnabled(False)
         self.deob_new_tab_button.setEnabled(False)
-        self.show_deob_status("Deobfuscating...")
+        self.show_deob_status("")
         self.deob_output.setReadOnly(False)
         try:
             self.deob_output.clear()
@@ -596,7 +596,7 @@ class ToolsWindow(QDialog):
         else:
             self.deob_result_text = ""
             self.deob_new_tab_button.setEnabled(False)
-        self.show_deob_status(status)
+        self.show_deob_status(status if kind != "done" else "")
 
     def open_deobfuscated_as_script(self):
         if not self.deob_result_text:
@@ -665,7 +665,7 @@ class ToolsWindow(QDialog):
         self.clear_fetch_output()
         self.fetch_to_script_button.setEnabled(False)
         self.fetch_button.setEnabled(False)
-        self.show_fetch_status("Fetching...")
+        self.show_fetch_status("")
         threading.Thread(
             target=stream_remote_text,
             args=(self.events, request_id, url, self.fetch_cancel),
