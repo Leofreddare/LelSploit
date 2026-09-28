@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+from lelsploit_desktop import fade_in_card
+from PyQt6 import sip
 import ctypes
 import hashlib
 import json
@@ -596,7 +598,7 @@ class MacroRunner(QObject):
 
     @property
     def running(self):
-        return bool(self.thread and self.thread.is_alive())
+        return bool(self._done is not None or (self.thread and self.thread.is_alive()))
 
     def stop(self):
         self.stop_event.set()
@@ -644,6 +646,7 @@ class MacroRunner(QObject):
         try:
             self.thread.start()
         except Exception:
+            self._done = None
             _NATIVE_RUN_LOCK.release()
             raise
 
@@ -1323,7 +1326,7 @@ class MacroPropertiesPanel(QWidget):
         button = QPushButton(str(current or "Record key…"))
         button.setToolTip("Click, then press the key to use")
         def capture():
-            builder = self.tree.window()
+            builder = self.tree.builder
             value, ok = record_key(self, builder.owner, "Record block key", str(current or ""))
             if ok:
                 button.setText(value)
@@ -1347,7 +1350,7 @@ class MacroPropertiesPanel(QWidget):
             widget.setChecked(bool(value))
             widget.toggled.connect(lambda checked, k=key: self._update_data(k, checked))
         elif kind in {'enum', 'asset'}:
-            widget = QComboBox()
+            widget = LelComboBox()
             choices = _macro_actions.asset_choices(_HOST) if kind == 'asset' else [
                 (_macro_actions.CONFIG[v][0] if key == 'setting' else v.title() if v in {'normal', 'custom', 'your', 'others'} else v, v)
                 for v in spec['choices']]
@@ -1449,6 +1452,7 @@ class MacroBuilderDialog(QDialog):
     def __init__(self, owner, macro=None, path=None, parent=None):
         super().__init__(parent or owner)
         self.owner = owner
+        self._collection_parent = parent
         source_path = Path(path) if path else None
         self.installed_path = source_path if source_path and source_path.resolve().parent == MACROS_DIR.resolve() else None
         self.path = source_path if self.installed_path is None else None
@@ -1481,8 +1485,8 @@ class MacroBuilderDialog(QDialog):
         self.name_edit = QLineEdit(str(initial.get("name") or "My Macro"))
         self.id_edit = QLineEdit(str(initial.get("id") or ""))
         if self._installed_id:
-            self.id_edit.setReadOnly(True)
-            self.id_edit.setToolTip("The ID stays fixed when applying changes to an installed macro.")
+            self.id_edit.setReadOnly(False)
+            self.id_edit.setToolTip("Changing the ID renames the installed macro and preserves its hotkey.")
         self.version_edit = QLineEdit(str(initial.get("version") or "1.0"))
         self.description_edit = QLineEdit(str(initial.get("description") or ""))
         self.name_edit.setPlaceholderText("Macro name")
@@ -1553,6 +1557,7 @@ class MacroBuilderDialog(QDialog):
         title_row.addWidget(self.delete_button)
         center_layout.addLayout(title_row)
         self.tree = MacroProgramTree()
+        self.tree.builder = self
         self.tree.load_steps(initial.get("steps", []))
         center_layout.addWidget(self.tree, 1)
         body.addWidget(center)
@@ -1661,7 +1666,7 @@ class MacroBuilderDialog(QDialog):
         self.tree.add_block(op, parent)
 
     def macro_payload(self):
-        macro_id = self._installed_id or self.id_edit.text().strip() or self.id_edit.placeholderText().strip()
+        macro_id = self.id_edit.text().strip() or self.id_edit.placeholderText().strip()
         payload = {
             "format": 1,
             "id": macro_id,
@@ -1685,8 +1690,10 @@ class MacroBuilderDialog(QDialog):
         try:
             payload = self.macro_payload()
             MACROS_DIR.mkdir(parents=True, exist_ok=True)
-            target = self.installed_path or MACROS_DIR / f"{payload['id']}.lmacro"
-            if self.installed_path is None and target.exists():
+            old_path = self.installed_path
+            old_id = self._installed_id
+            target = MACROS_DIR / f"{payload['id']}.lmacro"
+            if target.exists() and (old_path is None or target.resolve() != old_path.resolve()):
                 answer = QMessageBox.question(self, "Replace installed macro?",
                     "A macro with this ID is already installed. Replace it?",
                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -1694,15 +1701,22 @@ class MacroBuilderDialog(QDialog):
                 if answer != QMessageBox.StandardButton.Yes:
                     return False
             write_macro(target, payload)
+            if old_path is not None and old_path.resolve() != target.resolve():
+                old_path.unlink(missing_ok=True)
+            if old_id and old_id != payload['id']:
+                bindings = _macro_hotkeys(self.owner)
+                if old_id in bindings:
+                    bindings[payload['id']] = bindings.pop(old_id)
+                    _settings_set(self.owner, 'macros/hotkeys', bindings)
             self.installed_path = target
             self._installed_id = payload["id"]
             self.id_edit.setText(payload["id"])
-            self.id_edit.setReadOnly(True)
+            self.id_edit.setReadOnly(False)
             self.install_button.setText("Apply")
             self.install_button.setIcon(_file_icon("Apply.png", "install"))
             self._mark_saved()
-            if hasattr(self.parent(), "refresh_installed"):
-                self.parent().refresh_installed()
+            if hasattr(self._collection_parent, "refresh_installed"):
+                self._collection_parent.refresh_installed()
             return True
         except Exception as exc:
             QMessageBox.warning(self, "Install Macro", str(exc))
@@ -1716,8 +1730,8 @@ class MacroBuilderDialog(QDialog):
             write_macro(target, payload)
             self.path = target
             self._mark_saved()
-            if hasattr(self.parent(), "refresh_installed"):
-                self.parent().refresh_installed()
+            if hasattr(self._collection_parent, "refresh_installed"):
+                self._collection_parent.refresh_installed()
             return True
         except Exception as exc:
             QMessageBox.warning(self, "Save Macro", str(exc))
@@ -1762,7 +1776,16 @@ class MacroBuilderDialog(QDialog):
         if error and error != "Macro stopped.":
             QMessageBox.warning(self, "Macro", error)
 
+    def reject(self):
+        if getattr(self, '_accepting_close', False):
+            super().reject()
+        else:
+            self.close()
+
     def closeEvent(self, event):
+        if getattr(self, '_close_prompt_active', False):
+            event.ignore()
+            return
         if self.runner.running:
             self.runner.stop()
         if self._dirty:
@@ -1785,8 +1808,12 @@ class MacroBuilderDialog(QDialog):
                     button.setIcon(icon)
                     button.setIconSize(QSize(17, 17))
             box.setDefaultButton(install_button)
-            box.exec()
-            clicked = box.clickedButton()
+            self._close_prompt_active = True
+            try:
+                box.exec()
+                clicked = box.clickedButton()
+            finally:
+                self._close_prompt_active = False
             if clicked is cancel_button or clicked is None:
                 event.ignore()
                 return
@@ -1796,7 +1823,11 @@ class MacroBuilderDialog(QDialog):
             if clicked is save_button and not self.save():
                 event.ignore()
                 return
-        event.accept()
+        self._accepting_close = True
+        try:
+            super().closeEvent(event)
+        finally:
+            self._accepting_close = False
 
 
 # ---------------------------------------------------------------------------
@@ -2085,9 +2116,11 @@ class MacroMarketplacePane(QWidget):
                 QMessageBox.warning(self, "Macro Marketplace", str(payload))
             elif kind == "installed":
                 self.status.setText("")
-                window = self.window()
-                if hasattr(window, "refresh_installed"):
-                    window.refresh_installed()
+                window = self.parentWidget()
+                while window is not None and not hasattr(window, 'show_installed_macro'):
+                    window = window.parentWidget()
+                if window is not None:
+                    window.show_installed_macro(str(payload))
 
     def render_items(self):
         favorites = self.favorite_ids()
@@ -2371,7 +2404,7 @@ class MacroMarketplacePane(QWidget):
                 MACROS_DIR.mkdir(parents=True, exist_ok=True)
                 target = MACROS_DIR / (data["id"] + ".lmacro")
                 target.write_bytes(raw)
-                self.events.put(("installed", rid, f"Installed {data['name']}."))
+                self.events.put(("installed", rid, data["id"]))
             except Exception as exc:
                 self.events.put(("action_error", rid, str(exc)))
 
@@ -2551,6 +2584,10 @@ class MacrosWindow(QDialog):
         if old is not None:
             old.deleteLater()
 
+    def show_installed_macro(self, macro_id):
+        self._reveal_macro_id = macro_id
+        self.set_view('installed')
+
     def refresh_installed(self):
         self._clear_scroll(self.scroll)
         macros = installed_macros()
@@ -2566,7 +2603,11 @@ class MacrosWindow(QDialog):
             box.addWidget(label)
         else:
             for macro in macros:
-                box.addWidget(self._installed_card(macro))
+                card = self._installed_card(macro)
+                box.addWidget(card)
+                if macro.get('id') == getattr(self, '_reveal_macro_id', None):
+                    fade_in_card(card, self.scroll)
+                    self._reveal_macro_id = None
         box.addStretch(1)
         self.scroll.setWidget(content)
 
@@ -2666,14 +2707,22 @@ class MacrosWindow(QDialog):
         row.addLayout(text, 1)
 
         run = QPushButton("Run")
+        run.setProperty("macroId", macro["id"])
         run_icon = _file_icon("run.png", "run")
         if not run_icon.isNull():
             run.setIcon(run_icon)
             run.setIconSize(QSize(17, 17))
         run.clicked.connect(lambda checked=False, b=run, x=macro: self._run_button_clicked(b, x))
+        if self.runner.running and getattr(self, '_active_macro_id', None) == macro['id']:
+            self._set_card_run_state(run, True)
+            self._active_run_button = run
         row.addWidget(run)
         hotkey = QPushButton(_macro_hotkeys(self.owner).get(macro["id"], "Set hotkey"))
-        hotkey.setToolTip("Choose a hotkey to run this installed macro")
+        hotkey.setMinimumWidth(110)
+        hotkey.setFixedHeight(30)
+        hotkey.setObjectName('hotkeyButton')
+        hotkey.setStyleSheet('QPushButton {background:#101012;border:1px solid #2d2d31;border-radius:5px;padding:0 9px;color:#d6d6d6;} QPushButton:hover {background:#171719;border-color:#45454a;color:#ffffff;}')
+        hotkey.setToolTip("Set or change the macro hotkey. Choose Clear hotkey in the selector to remove it.")
         hotkey.clicked.connect(lambda checked=False, x=macro: self.choose_macro_hotkey(x))
         row.addWidget(hotkey)
         edit = QPushButton("Edit")
@@ -2697,17 +2746,22 @@ class MacrosWindow(QDialog):
     def create_macro(self):
         builder = MacroBuilderDialog(self.owner, parent=self)
         self.builder_windows.append(builder)
-        builder.finished.connect(lambda _=0, b=builder: self._builder_closed(b))
+        builder.finished.connect(lambda _=0, b=builder: QTimer.singleShot(0, lambda: self._builder_closed(b)))
         builder.show()
 
     def edit_macro(self, macro):
         path = macro.get("_path")
         builder = MacroBuilderDialog(self.owner, macro=macro, path=path, parent=self)
         self.builder_windows.append(builder)
-        builder.finished.connect(lambda _=0, b=builder: self._builder_closed(b))
+        builder.finished.connect(lambda _=0, b=builder: QTimer.singleShot(0, lambda: self._builder_closed(b)))
         builder.show()
 
     def _builder_closed(self, builder):
+        if builder.runner.running:
+            builder.runner.stop()
+            QTimer.singleShot(50, lambda: self._builder_closed(builder))
+            return
+        builder.runner._done = None
         try:
             self.builder_windows.remove(builder)
         except ValueError:
@@ -2738,11 +2792,29 @@ class MacrosWindow(QDialog):
     def choose_macro_hotkey(self, macro):
         bindings = _macro_hotkeys(self.owner)
         current = bindings.get(macro["id"], "None")
-        choice, ok = record_key(self, self.owner, "Record macro hotkey", current, chords=True, allow_clear=True)
+        from lelsploit_fastflags import FastFlagHotkeyCaptureDialog, hotkey_text
+        self.owner._macro_recording = True
+        try:
+            dialog = FastFlagHotkeyCaptureDialog(macro['name'], self)
+            dialog.setWindowTitle('Set Macro Hotkey')
+            label = dialog._blur_title_bar.findChild(QLabel, 'blurWindowTitle')
+            if label is not None:
+                label.setText('Set Macro Hotkey')
+            ok = dialog.exec() == QDialog.DialogCode.Accepted
+            choice = 'None' if dialog.clear_requested else hotkey_text(dialog.binding).upper().replace(' ', '')
+        finally:
+            self.owner._macro_recording = False
         if not ok:
             return
         if choice != "None":
-            if self.stop_hotkey_service.key_name in hotkey_parts(choice):
+            try:
+                names = hotkey_parts(choice)
+                if blocked_keys({_KEY_CODES[name] for name in names}):
+                    raise ValueError('That system shortcut is blocked.')
+            except ValueError as exc:
+                QMessageBox.warning(self, 'Macro hotkey', str(exc))
+                return
+            if self.stop_hotkey_service.key_name in names:
                 QMessageBox.warning(self, "Macro hotkey", "That key is reserved for stopping macros. Change the Macro stop key in Settings or choose another key.")
                 return
             if any(key != macro["id"] and value == choice for key, value in bindings.items()):
@@ -2755,7 +2827,11 @@ class MacrosWindow(QDialog):
         self.refresh_installed()
 
     def run_installed_hotkey(self, macro_id):
-        if self.runner.running or any(b.runner.running for b in self.builder_windows):
+        if self.runner.running:
+            if getattr(self, '_active_macro_id', None) == macro_id:
+                self.runner.stop()
+            return
+        if any(not sip.isdeleted(b) and b.runner.running for b in self.builder_windows):
             return
         for macro in installed_macros():
             if macro.get("id") == macro_id:
@@ -2788,12 +2864,16 @@ class MacrosWindow(QDialog):
         self.run_macro(macro, button)
 
     def run_macro(self, macro, button=None):
+        if button is None:
+            button = next((item for item in self.findChildren(QPushButton)
+                           if item.property('macroId') == macro.get('id')), None)
         try:
             if self.runner.running:
                 raise RuntimeError(f"A macro is already running. Press {self.stop_hotkey_service.key_name} or Stop first.")
             if button is not None:
                 self._active_run_button = button
                 self._set_card_run_state(button, True)
+            self._active_macro_id = macro['id']
             self.runner.start(macro, lambda error: self._run_done(error))
         except Exception as exc:
             if button is not None:
@@ -2803,6 +2883,7 @@ class MacrosWindow(QDialog):
             QMessageBox.warning(self, "Macro", str(exc))
 
     def _run_done(self, error):
+        self._active_macro_id = None
         if self._active_run_button is not None:
             try:
                 self._set_card_run_state(self._active_run_button, False)

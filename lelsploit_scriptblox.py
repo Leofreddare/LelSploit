@@ -814,15 +814,47 @@ class ScriptBloxWindow(QDialog):
         self._display_game(game)
         self.refresh()
 
-    def _show_game_suggestions(self, games):
+    def _game_result_item(self, game):
+        item = QStandardItem(game['name'])
+        item.setData(dict(game), Qt.ItemDataRole.UserRole)
+        item.setToolTip(f"Place ID {game['place_id']}")
+        item.setSizeHint(QSize(310, 50))
+        item.setIcon(self.game_icon_cache.get(game['universe_id'], app_icon('roblox')))
+        return item
+
+    def _show_game_loading(self):
         self.game_model.clear()
-        for game in games[:6]:
-            item = QStandardItem(game['name'])
-            item.setData(dict(game), Qt.ItemDataRole.UserRole)
-            item.setToolTip(f"Place ID {game['place_id']}")
+        for _ in range(5):
+            item = QStandardItem('Loading…')
+            item.setEnabled(False)
+            item.setData(None, Qt.ItemDataRole.UserRole)
+            item.setForeground(QColor('#777b80'))
             item.setSizeHint(QSize(310, 50))
-            item.setIcon(self.game_icon_cache.get(game['universe_id'], app_icon('roblox')))
+            pixmap = QPixmap(34, 34)
+            pixmap.fill(QColor('#303438'))
+            item.setIcon(QIcon(pixmap))
             self.game_model.appendRow(item)
+        if self.game_search.hasFocus() and self.isVisible():
+            self.game_completer.setCompletionPrefix('')
+            self.game_completer.complete()
+
+    def _show_game_suggestions(self, games, progressive=False):
+        if progressive and games:
+            self._show_game_loading()
+            generation = self.game_generation
+            for row, game in enumerate(games[:5]):
+                def reveal(row=row, game=dict(game)):
+                    if generation != self.game_generation or self.saved_only or self.selected_game:
+                        return
+                    self.game_model.setItem(row, self._game_result_item(game))
+                    if row == min(5, len(games)) - 1:
+                        while self.game_model.rowCount() > min(5, len(games)):
+                            self.game_model.removeRow(self.game_model.rowCount() - 1)
+                QTimer.singleShot(row * 45, reveal)
+            return
+        self.game_model.clear()
+        for game in games[:5]:
+            self.game_model.appendRow(self._game_result_item(game))
         if games and self.game_search.hasFocus() and self.isVisible():
             self.game_completer.setCompletionPrefix('')
             self.game_completer.complete()
@@ -840,14 +872,19 @@ class ScriptBloxWindow(QDialog):
                     if key not in seen and all(word in game['name'].casefold() for word in query.split()):
                         seen.add(key)
                         games.append(game)
-                        if len(games) == 6:
+                        if len(games) == 5:
                             break
-                if len(games) == 6:
+                if len(games) == 5:
                     break
-        self._show_game_suggestions(games)
+        if games:
+            self._show_game_suggestions(games)
+        elif len(query) >= 2 or _roblox_games.place_id(text):
+            self._show_game_loading()
+        else:
+            self._show_game_suggestions([])
 
     def _accept_game_results(self, generation, payload):
-        games = payload['games'][:6]
+        games = payload['games'][:5]
         if payload['numeric']:
             if generation == self.game_generation and not self.saved_only:
                 if games and _roblox_games.place_id(self.game_search.text()) == games[0]['place_id']:
@@ -862,7 +899,7 @@ class ScriptBloxWindow(QDialog):
             return
         if generation == self.game_generation and self.game_search.text().strip() == payload['query']:
             self.game_result_generation = generation
-            self._show_game_suggestions(games)
+            self._show_game_suggestions(games, progressive=True)
         elif self.game_result_generation != self.game_generation:
             # A late 'door' response may preview 'doors', but must never replace
             # the authoritative response for the current query or change its ID.
@@ -883,6 +920,8 @@ class ScriptBloxWindow(QDialog):
         for row in range(self.game_model.rowCount()):
             item = self.game_model.item(row)
             game = item.data(Qt.ItemDataRole.UserRole)
+            if not isinstance(game, dict):
+                continue
             icon = self.game_icon_cache.get(game['universe_id'])
             if icon is not None:
                 item.setIcon(icon)
@@ -1161,6 +1200,8 @@ class ScriptBloxWindow(QDialog):
             elif kind == 'roblox_games_error':
                 if first == self.game_generation and not self.saved_only:
                     self.game_search.setToolTip('Roblox game lookup failed: ' + second)
+                    self.game_model.clear()
+                    self.game_completer.popup().hide()
             elif kind == 'roblox_lookup_done':
                 self.game_lookup_busy = False
                 if self.game_lookup_pending and not self.saved_only:

@@ -1,5 +1,7 @@
+from lelsploit_layouts import OriginalLayoutFit
 import ast
 import base64
+from lelsploit_desktop import WindowRouter
 import math
 import random
 import statistics
@@ -2922,6 +2924,7 @@ class LelComboBox(QComboBox):
         menu = self._popup_menu
         if menu is not None and not menu.isVisible():
             self._popup_menu = None
+            menu.deleteLater()
 
     def _select_popup_item(self, index):
         if 0 <= index < self.count():
@@ -2930,6 +2933,8 @@ class LelComboBox(QComboBox):
 
     def _build_popup_menu(self):
         menu = QMenu(self.window())
+        menu.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         menu.setObjectName("lelComboMenu")
         menu.setMinimumWidth(max(self.width(), 180))
         menu.setStyleSheet("""
@@ -2959,7 +2964,11 @@ class LelComboBox(QComboBox):
             action.setEnabled(bool(self.model().flags(model_index) & Qt.ItemFlag.ItemIsEnabled))
             action.triggered.connect(lambda checked=False, i=index: self._select_popup_item(i))
             menu.addAction(action)
-        menu.aboutToHide.connect(lambda: QTimer.singleShot(0, self._clear_popup_menu))
+        def clear_menu():
+            if self._popup_menu is menu:
+                self._popup_menu = None
+            menu.deleteLater()
+        menu.aboutToHide.connect(clear_menu)
         return menu
 
     def showPopup(self):
@@ -3492,6 +3501,8 @@ class BlurTitleBar(QFrame):
         window.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     def _sync_native_window(self):
+        if not self.owner_window.isWindow():
+            return
         self._apply_rounded_corners()
         if self._pinned:
             self._refresh_topmost()
@@ -3522,7 +3533,7 @@ class BlurTitleBar(QFrame):
         event.accept()
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton and not self.owner_window.isMaximized():
+        if self.owner_window.isWindow() and event.button() == Qt.MouseButton.LeftButton and not self.owner_window.isMaximized():
             handle = self.owner_window.windowHandle()
             try:
                 if handle is not None and handle.startSystemMove():
@@ -3572,6 +3583,14 @@ def blur_content_layout(window, host, title, margins=(16, 16, 16, 16), spacing=1
     outer.addWidget(body, 1)
     window._blur_title_bar = title_bar
     window._blur_body = body
+    window._layout_fit = OriginalLayoutFit(window, body, outer)
+    ancestor = window.parentWidget()
+    while ancestor is not None:
+        router = getattr(ancestor, 'window_router', None)
+        if router is not None:
+            router.register(window)
+            break
+        ancestor = ancestor.parentWidget()
     return content
 
 
@@ -8361,7 +8380,7 @@ class VisualWizardWindow(QDialog):
         self.setWindowTitle("Visual Wizard"); self.resize(790, 680); self.setMinimumSize(650, 520); apply_window_icon(self)
         root = blur_content_layout(self, self, "Visual Wizard", (16, 12, 16, 16), 10)
         preset_row = QHBoxLayout(); preset_row.setSpacing(8)
-        self.preset = QComboBox(); self.preset.addItems(VISUAL_THEME_PRESETS.keys()); self.preset.setMinimumWidth(190)
+        self.preset = LelComboBox(); self.preset.addItems(VISUAL_THEME_PRESETS.keys()); self.preset.setMinimumWidth(190)
         self.preset.currentTextChanged.connect(self._preset_changed)
         preset_row.addWidget(QLabel("Theme")); preset_row.addWidget(self.preset, 1)
         reset = QPushButton("Reset"); reset.clicked.connect(self._reset); export = QPushButton("Export"); export.clicked.connect(self._export_theme); import_btn = QPushButton("Import"); import_btn.clicked.connect(self._import_theme)
@@ -8907,6 +8926,8 @@ start()</pre>
 </ol>
 """
 
+from lelsploit_extension_docs import EXTENSIONS_DOCUMENTATION_HTML
+
 class DocumentationWindow(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
@@ -9014,7 +9035,7 @@ class SettingsWindow(QDialog):
         self.owner = parent
         self.setWindowTitle("Settings")
         self.resize(600, 790)
-        self.setMinimumSize(550, 720)
+        self.setMinimumSize(550, 420)
         apply_window_icon(self)
 
         outer_layout = blur_content_layout(self, self, "Settings", (0, 0, 0, 0), 0)
@@ -9099,6 +9120,17 @@ class SettingsWindow(QDialog):
         app_title = QLabel("Application")
         app_title.setStyleSheet("color: #eeeeee; font-size: 14px; font-weight: 600;")
         layout.addWidget(app_title)
+        window_row = QHBoxLayout()
+        window_row.addWidget(QLabel('Window layout'))
+        window_row.addStretch(1)
+        self.window_mode_combo = LelComboBox()
+        self.window_mode_combo.setFixedSize(210, 34)
+        self.window_mode_combo.addItem('Multiple windows (default)', 'multiple')
+        self.window_mode_combo.addItem('Single window', 'single')
+        self.window_mode_combo.currentIndexChanged.connect(self.save_window_mode)
+        window_row.addWidget(self.window_mode_combo)
+        layout.addLayout(window_row)
+        layout.addSpacing(8)
         close_row = QHBoxLayout()
         close_row.addWidget(QLabel("When LelSploit is closed"))
         close_row.addStretch(1)
@@ -9217,6 +9249,9 @@ class SettingsWindow(QDialog):
             lum = 0.2126 * color.red() + 0.7152 * color.green() + 0.0722 * color.blue()
             button.setText(color.name().upper())
             button.setStyleSheet(f"background:{color.name()};color:{'#090909' if lum > 150 else '#ffffff'};border:1px solid #3a3a3a;border-radius:4px;padding:0;")
+        self.window_mode_combo.blockSignals(True)
+        self.window_mode_combo.setCurrentIndex(max(0, self.window_mode_combo.findData(self.owner.settings.value('application/window_mode', 'multiple'))))
+        self.window_mode_combo.blockSignals(False)
         close_behavior = self.owner.close_behavior()
         close_index = self.close_combo.findData(close_behavior)
         self.close_combo.blockSignals(True)
@@ -9262,6 +9297,11 @@ class SettingsWindow(QDialog):
         if value:
             self.owner.settings.setValue("scriptblox/install_behavior", value)
             self.owner.settings.sync()
+
+    def save_window_mode(self, _index):
+        self.owner.settings.setValue('application/window_mode', self.window_mode_combo.currentData())
+        self.owner.settings.sync()
+        QTimer.singleShot(0, self.owner.window_router.apply_mode)
 
     def save_close_behavior(self, _index):
         value = self.close_combo.currentData()
@@ -9395,7 +9435,7 @@ class BrightCheckBox(QWidget):
             self.indicator.setText("✓")
             self.indicator.setStyleSheet(
                 f"QLabel {{ background:{background}; border:1px solid {border}; border-radius:4px; "
-                "color:#ffffff; font-size:12px; font-weight:700; }}"
+                "color:#ffffff; font-size:12px; font-weight:700; }"
             )
             self.label.setStyleSheet("QLabel { color:#e6f7ea; background:transparent; }")
         else:
@@ -10011,6 +10051,7 @@ class LelSploitWindow(QMainWindow):
         self._extension_folder_timer.start()
         QTimer.singleShot(450, self.refresh_extensions_runtime)
         QTimer.singleShot(900, self._preload_fastflags_window)
+        self.window_router = WindowRouter(self, app_icon)
         threading.Thread(target=self.api_worker, daemon=True).start()
 
     def close_behavior(self):
@@ -12226,6 +12267,7 @@ class LelSploitWindow(QMainWindow):
             return
         if signature == self._attached_join_signature:
             return
+        self.set_connection_state(False)
         self.queue_auto_detach_after_roblox_close()
 
     def set_roblox_state(self, running):
@@ -12511,6 +12553,12 @@ class LelSploitWindow(QMainWindow):
                 except Exception:
                     # A failed probe is not evidence of a detach; retry next second.
                     continue
+                if not attached and api is not None:
+                    try:
+                        detach_api(api, None)
+                    except Exception:
+                        pass
+                    api = None  # A new session requires an explicit Attach action.
                 self.events.put(("attachment_status", attached))
                 continue
             if request is None:
@@ -12531,7 +12579,8 @@ class LelSploitWindow(QMainWindow):
                     )
                     succeeded = api is not None and not cancel.is_set()
                 elif action in ("detach", "detach_cleanup"):
-                    api = detach_api(api, logger if action == "detach" else None)
+                    detach_api(api, logger if action == "detach" else None)
+                    api = None
                     succeeded = False
                 else:
                     api = run_script(payload, logger, stop, api)
@@ -12552,8 +12601,10 @@ class LelSploitWindow(QMainWindow):
         # Preserve its progress label and wait for its completion or the next probe.
         if self.busy or self._pending_api_after_restart is not None:
             return
-        if bool(attached) != bool(self.api_attached):
-            self.set_connection_state(bool(attached))
+        # Probes may revoke an attachment, never grant one in a new session.
+        # Only successful explicit attach/reattach/execute completion may do that.
+        if not attached and self.api_attached:
+            self.set_connection_state(False)
 
     def poll_api(self):
         for _ in range(100):

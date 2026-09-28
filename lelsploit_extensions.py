@@ -1,3 +1,4 @@
+from lelsploit_desktop import fade_in_card
 
 
 
@@ -701,7 +702,7 @@ class ExtensionMarketplacePane(QWidget):
                 self.owner.refresh_extensions_runtime()
                 window = getattr(self.owner, "extensions_window", None)
                 if window is not None:
-                    window.reload()
+                    window.show_installed_extension(str(payload))
 
     def render_items(self):
         favorites = self.favorite_ids()
@@ -1083,7 +1084,7 @@ class ExtensionMarketplacePane(QWidget):
                     if target.exists():
                         target.unlink()
                     os.replace(temp, target)
-                    self.events.put(("installed", self.request_id, f"Installed {record['manifest']['name']}."))
+                    self.events.put(("installed", self.request_id, record["manifest"]["id"]))
                 finally:
                     temp.unlink(missing_ok=True)
             except Exception as exc:
@@ -1340,9 +1341,17 @@ class ExtensionsWindow(QDialog):
                 cards.addWidget(empty)
             else:
                 for record in records:
-                    cards.addWidget(self._build_card(record, disabled))
+                    card = self._build_card(record, disabled)
+                    cards.addWidget(card)
+                    if (record.get('manifest') or {}).get('id') == getattr(self, '_reveal_extension_id', None):
+                        fade_in_card(card, self.scroll)
+                        self._reveal_extension_id = None
         cards.addStretch(1)
         self.scroll.setWidget(content)
+
+    def show_installed_extension(self, extension_id):
+        self._reveal_extension_id = extension_id
+        self.set_view('installed')
 
     def _build_card(self, record, disabled):
         card = QFrame()
@@ -2055,16 +2064,9 @@ def _install_power_api(host_globals):
 
 
 def _schedule_documentation_patch():
-    host = _HOST_GLOBALS
-    if not isinstance(host, dict):
-        return
-    def worker():
-        for _ in range(100):
-            if "EXTENSIONS_DOCUMENTATION_HTML" in host:
-                host["EXTENSIONS_DOCUMENTATION_HTML"] = EXTENSION_API5_DOCUMENTATION_HTML
-                return
-            time.sleep(0.02)
-    threading.Thread(target=worker, daemon=True).start()
+    # The UI imports the complete bundled guide deterministically after its legacy
+    # literals. Do not race a background thread against module initialization.
+    return
 
 
 __all__ = [
