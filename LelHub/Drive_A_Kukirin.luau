@@ -762,331 +762,585 @@ local function createQuestClaims(context)
 end
 
 local function createAutoFarm(context)
+    local scope = createScope()
     local controller = {
         Enabled = false,
-        Scooter = nil,
-        Body = nil,
-        BestScooter = nil,
-        CurrentSteerValue = nil,
-        TeleportPos = Vector3.new(3086, 4, -2683),
         Generation = 0,
+        Status = "Stopped",
+        ActivePrompt = nil,
+        HasCompletedDelivery = false,
     }
+    local lastNotice = -math.huge
 
-    local scope = createScope()
-    local savedJump
+    local function characterParts()
+        local character = context.Player.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
 
-    function controller:GetBestOwnedScooter()
-        local owned = context.Player:FindFirstChild("OwnedScooters")
-        local templates = context.ReplicatedStorage:FindFirstChild("Scooters")
+        if humanoid and humanoid.Health > 0 and root then
+            return character, humanoid, root
+        end
+    end
 
-        if not owned or not templates then
-            return nil
+    local function active(generation)
+        return controller.Enabled and controller.Generation == generation and not context.Destroying
+    end
+
+    local function pause(duration, generation)
+        local deadline = os.clock() + duration
+
+        while active(generation) and os.clock() < deadline do
+            task.wait(math.min(0.1, deadline - os.clock()))
         end
 
-        local bestName
-        local bestSpeed = -1
+        return active(generation)
+    end
 
-        for _, entry in ipairs(owned:GetChildren()) do
-            if entry:IsA("BoolValue") and entry.Value == true then
-                local template = templates:FindFirstChild(entry.Name)
-                local speed = template and finiteNumber(template:GetAttribute("TopSpeedKmh"), 0)
+    local function findPrompt(parent, name)
+        local object = findNamed(parent, name)
 
-                if speed and speed > bestSpeed then
-                    bestName = entry.Name
-                    bestSpeed = speed
+        if object and object:IsA("ProximityPrompt") then
+            return object
+        end
+
+        return object and object:FindFirstChildWhichIsA("ProximityPrompt", true) or nil
+    end
+
+    local function findWorkerRoot()
+        local worker = findNamed(context.Workspace, "Worker")
+        local root = findNamed(worker, "HumanoidRootPart")
+        return root and root:IsA("BasePart") and root or nil
+    end
+
+    local function findJobPrompt()
+        local job = findNamed(context.Workspace, "DeliveryJOB")
+        local prompt = findPrompt(job, "DeliveryJobPrompt")
+
+        if prompt then
+            return prompt
+        end
+
+        if job then
+            if job:IsA("ProximityPrompt") then
+                return job
+            end
+
+            prompt = job:FindFirstChildWhichIsA("ProximityPrompt", true)
+
+            if prompt then
+                return prompt
+            end
+        end
+
+        return findPrompt(findNamed(context.Workspace, "Worker"), "DeliveryJobPrompt")
+    end
+
+    local function deliveryTarget()
+        for _, npc in ipairs(context.Workspace:GetChildren()) do
+            if npc:IsA("Model") and npc.Name:match("^NPC%s*%d+$") then
+                local root = npc:FindFirstChild("HumanoidRootPart")
+                local prompt = findPrompt(root, "DeliverPrompt")
+
+                if root and root:IsA("BasePart") and prompt and prompt.Enabled then
+                    return root, prompt
                 end
             end
         end
-
-        return bestName
     end
 
-    function controller:GetScooterFinalTopSpeed(name)
-        return calculateTopSpeed(context, name)
+    local function setWaiting(message)
+        controller.Status = message
+
+        if os.clock() - lastNotice >= 10 then
+            lastNotice = os.clock()
+            context.Notify({ Title = "Delivery Farm", Content = message, Duration = 3 })
+        end
     end
 
-    function controller:DestroyLocalScooter()
-        for _, object in ipairs(context.Workspace:GetChildren()) do
-            if object:IsA("Model") and ownsScooter(context.Player, object) then
-                pcall(function()
-                    object:Destroy()
-                end)
+    local stabilityScope = createScope()
+    local stabilityState
+
+    local function restoreCharacter()
+        stabilityScope:Clean()
+        local saved = stabilityState
+        stabilityState = nil
+
+        if not saved then
+            return
+        end
+
+        if saved.Root.Parent then
+            saved.Root.Anchored = saved.Anchored
+        end
+
+        if saved.Humanoid.Parent then
+            saved.Humanoid.AutoRotate = saved.AutoRotate
+        end
+
+        for part, canCollide in pairs(saved.Collisions) do
+            if part.Parent then
+                part.CanCollide = canCollide
             end
         end
     end
 
-    function controller:MoveToCenter(root, scooter)
-        local body = findDriveBody(scooter)
-        local facing = Vector3.new(0, 0, -1)
-
-        if body then
-            body.CFrame = CFrame.lookAt(self.TeleportPos, self.TeleportPos + facing)
-            body.AssemblyLinearVelocity = Vector3.zero
-            body.AssemblyAngularVelocity = Vector3.zero
+    local function stabilizeCharacter(character, humanoid, root)
+        if stabilityState and stabilityState.Character ~= character then
+            restoreCharacter()
         end
 
-        if root then
-            local position = self.TeleportPos + Vector3.new(0, 3, 0)
-            root.CFrame = CFrame.lookAt(position, position + facing)
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
+        if not stabilityState then
+            stabilityState = {
+                Character = character,
+                Humanoid = humanoid,
+                Root = root,
+                Anchored = root.Anchored,
+                AutoRotate = humanoid.AutoRotate,
+                Collisions = {},
+            }
+
+            local saved = stabilityState
+            local function disableCollision(part)
+                if part:IsA("BasePart") then
+                    if saved.Collisions[part] == nil then
+                        saved.Collisions[part] = part.CanCollide
+                    end
+
+                    part.CanCollide = false
+                end
+            end
+
+            for _, part in ipairs(character:GetDescendants()) do
+                disableCollision(part)
+            end
+
+            stabilityScope:Connect(character.DescendantAdded, disableCollision)
         end
 
-        self.Scooter = scooter
-        self.Body = body
-    end
-
-    function controller:MountScooter(scooter, timeout, interval)
-        local character = context.Player.Character
-        local root = character and character:FindFirstChild("HumanoidRootPart")
-
-        if not root then
-            return false
+        if not stabilityState.Velocity or not stabilityState.Velocity.Parent then
+            local velocity = Instance.new("BodyVelocity")
+            velocity.Name = "LelHubDeliveryStabilizer"
+            velocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+            velocity.P = 15000
+            velocity.Velocity = Vector3.zero
+            velocity.Parent = root
+            stabilityState.Velocity = stabilityScope:Add(velocity)
         end
 
-        local position = scooter:GetPivot().Position + Vector3.new(0, 4, 0)
-        root.CFrame = CFrame.lookAt(position, position + Vector3.new(0, 0, -1))
+        root.Anchored = false
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
-        task.wait(0.35)
+        humanoid.AutoRotate = false
+        return stabilityState
+    end
 
-        local prompt = prepareMountPrompt(scooter)
+    local function maintainStability()
+        local saved = stabilityState
 
-        if not prompt then
+        if not saved then
+            return
+        end
+
+        if context.Player.Character ~= saved.Character or not saved.Root.Parent or saved.Humanoid.Health <= 0 then
+            restoreCharacter()
+            return
+        end
+
+        saved.Root.Anchored = false
+        saved.Humanoid.AutoRotate = false
+        saved.Root.AssemblyLinearVelocity = Vector3.zero
+        saved.Root.AssemblyAngularVelocity = Vector3.zero
+
+        for part in pairs(saved.Collisions) do
+            if part.Parent then
+                part.CanCollide = false
+            end
+        end
+
+        if saved.Velocity and saved.Velocity.Parent then
+            saved.Velocity.Velocity = Vector3.zero
+        else
+            stabilizeCharacter(saved.Character, saved.Humanoid, saved.Root)
+        end
+    end
+
+    local function moveNear(target, generation, standOff, tolerance)
+        local character, humanoid, root = characterParts()
+
+        if not character or not target.Parent then
             return false
         end
 
-        local deadline = os.clock() + timeout
+        if root:FindFirstChild("ScooterMountWeld") then
+            pcall(sendScooterInput, context, 0, true)
 
-        while self.Enabled and os.clock() < deadline do
-            pcall(fireproximityprompt, prompt)
-            task.wait(interval)
+            if not pause(0.4, generation) then
+                return false
+            end
+        end
 
-            local mounted = findMountedScooter(context.Player)
+        if humanoid.SeatPart then
+            humanoid.Sit = false
 
-            if mounted then
-                task.wait(0.4)
-                local _, currentRoot = findMountedScooter(context.Player)
-                self:MoveToCenter(currentRoot, mounted)
+            if not pause(0.25, generation) then
+                return false
+            end
+        end
+
+        if not active(generation) or context.Player.Character ~= character or not root.Parent or not target.Parent then
+            return false
+        end
+
+        if root:FindFirstChild("ScooterMountWeld") or humanoid.SeatPart then
+            setWaiting("Waiting to dismount before teleporting.")
+            return false
+        end
+
+        local saved = stabilizeCharacter(character, humanoid, root)
+
+        for _ = 1, 3 do
+            if not active(generation) or context.Player.Character ~= character or not root.Parent or not target.Parent then
+                return false
+            end
+
+            local targetFrame = target:IsA("Attachment") and target.WorldCFrame or target.CFrame
+            saved.TargetFrame = targetFrame * CFrame.new(0, 0, standOff or 2)
+            character:PivotTo(saved.TargetFrame * root.CFrame:Inverse() * character:GetPivot())
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+
+            if not pause(0.05, generation) or context.Player.Character ~= character then
+                return false
+            end
+
+            if root.Parent and (root.Position - saved.TargetFrame.Position).Magnitude <= (tolerance or 1.5) then
                 return true
             end
         end
 
+        setWaiting("Direct teleport did not reach the destination; retrying.")
         return false
     end
 
-    function controller:UpdateSteering()
-        if not self.Enabled then
-            return
+    local function interact(prompt, fallback, generation, attempt)
+        if not active(generation) or not prompt.Parent or not prompt.Enabled or not characterParts() then
+            return false
         end
 
-        local scooter = findMountedScooter(context.Player)
-        local body = findDriveBody(scooter)
+        local anchor = prompt.Parent
 
-        if not body or not body.Parent then
-            return
+        while anchor and not anchor:IsA("BasePart") and not anchor:IsA("Attachment") do
+            anchor = anchor.Parent
         end
 
-        self.Scooter = scooter
-        self.Body = body
+        anchor = anchor or fallback
+        local range = math.max(0.5, prompt.MaxActivationDistance)
 
-        local topSpeed = finiteNumber(scooter:GetAttribute("TopSpeedKmh"), self.FinalTopSpeed or 60)
-        local steer = calculateFarmSteering(body, self.TeleportPos, topSpeed)
-        self.CurrentSteerValue = steer
+        if not anchor or not moveNear(anchor, generation, math.min(2, range * 0.4), math.min(0.75, range * 0.2)) then
+            return false
+        end
 
-        context.Player:SetAttribute("ScooterLocalSteer", steer)
-        context.Player:SetAttribute("ScooterLocalThrottle", 1)
-        context.Player:SetAttribute("ScooterLocalBrake", 0)
-        context.Player:SetAttribute("ScooterLocalWheelie", 1)
-        sendScooterInput(context, steer, false)
+        if not prompt.Parent or not prompt.Enabled then
+            return false
+        end
+
+        if not pause(0.25, generation) or not prompt.Parent or not prompt.Enabled then
+            return false
+        end
+
+        local _, _, root = characterParts()
+        local anchorFrame = anchor:IsA("Attachment") and anchor.WorldCFrame or anchor.CFrame
+
+        if not root or (root.Position - anchorFrame.Position).Magnitude > range then
+            return false
+        end
+
+        local success, message = pcall(function()
+            local holdDuration = math.max(0, prompt.HoldDuration)
+
+            if type(fireproximityprompt) == "function" and (attempt or 1) % 2 == 0 then
+                fireproximityprompt(prompt, holdDuration)
+            else
+                controller.ActivePrompt = prompt
+                prompt:InputHoldBegin()
+
+                if not pause(holdDuration + 0.15, generation) then
+                    return
+                end
+
+                prompt:InputHoldEnd()
+                controller.ActivePrompt = nil
+            end
+        end)
+
+        if not success then
+            if controller.ActivePrompt then
+                pcall(function()
+                    controller.ActivePrompt:InputHoldEnd()
+                end)
+                controller.ActivePrompt = nil
+            end
+
+        end
+
+        return success and active(generation)
     end
 
-    function controller:Fail(message)
+    local function readJobCountdown()
+        local playerGui = context.Player:FindFirstChildOfClass("PlayerGui")
+        local deliveryUI = playerGui and playerGui:FindFirstChild("DeliveryUI")
+        local toast = deliveryUI and deliveryUI:FindFirstChild("Toast")
+
+        if not toast then
+            return nil
+        end
+
+        local objects = { toast }
+
+        for _, descendant in ipairs(toast:GetDescendants()) do
+            table.insert(objects, descendant)
+        end
+
+        for _, object in ipairs(objects) do
+            if object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox") then
+                local visible = true
+                local ancestor = object
+
+                while ancestor and ancestor ~= playerGui do
+                    if ancestor:IsA("GuiObject") and not ancestor.Visible then
+                        visible = false
+                        break
+                    end
+
+                    ancestor = ancestor.Parent
+                end
+
+                local text = object.Text:gsub("<[^>]*>", ""):lower()
+                local seconds = tonumber(text:match("next%s+job%s+in%s+(%d+%.?%d*)%s*s"))
+
+                if visible and seconds then
+                    return seconds
+                end
+            end
+        end
+    end
+
+    local function requestJob(workerRoot, generation)
+        for attempt = 1, 4 do
+            if not active(generation) then
+                return nil
+            end
+
+            local root, deliveryPrompt = deliveryTarget()
+
+            if root then
+                return root, deliveryPrompt
+            end
+
+            local jobPrompt = findJobPrompt()
+
+            if not jobPrompt or not jobPrompt.Enabled then
+                setWaiting(jobPrompt and "Worker job prompt is disabled; waiting for it to enable."
+                    or "At Worker; waiting for DeliveryJOB's job prompt to load.")
+
+                if not pause(0.5, generation) then
+                    return nil
+                end
+            elseif interact(jobPrompt, workerRoot, generation, attempt) then
+                controller.Status = "Checking Worker response"
+                local deadline = os.clock() + 1.5
+                local cooldownDeadline
+
+                repeat
+                    root, deliveryPrompt = deliveryTarget()
+
+                    if root then
+                        return root, deliveryPrompt
+                    end
+
+                    local seconds = controller.HasCompletedDelivery and readJobCountdown() or nil
+
+                    if seconds and not cooldownDeadline then
+                        cooldownDeadline = os.clock() + seconds + 0.5
+                    end
+
+                    if not pause(0.1, generation) then
+                        return nil
+                    end
+                until os.clock() >= deadline
+
+                if cooldownDeadline then
+                    controller.Status = "Waiting for the next delivery job"
+
+                    while active(generation) and os.clock() < cooldownDeadline do
+                        root, deliveryPrompt = deliveryTarget()
+
+                        if root then
+                            return root, deliveryPrompt
+                        end
+
+                        if not pause(math.min(0.1, cooldownDeadline - os.clock()), generation) then
+                            return nil
+                        end
+                    end
+
+                    return nil
+                end
+            end
+        end
+
+        setWaiting("Worker interaction was not confirmed; retrying the job prompt.")
+        return nil
+    end
+
+    local function completeDelivery(targetRoot, prompt, generation)
+        for attempt = 1, 4 do
+            if not active(generation) then
+                return false
+            end
+
+            if not prompt.Parent or not prompt.Enabled then
+                return true
+            end
+
+            if interact(prompt, targetRoot, generation, attempt) then
+                controller.Status = "Confirming NPC delivery"
+                local deadline = os.clock() + 1.5
+
+                repeat
+                    if not prompt.Parent or not prompt.Enabled then
+                        return true
+                    end
+
+                    if not pause(0.1, generation) then
+                        return false
+                    end
+                until os.clock() >= deadline
+            end
+        end
+
+        setWaiting("NPC delivery was not confirmed; staying here to retry.")
+        return false
+    end
+
+    local function runDelivery(generation)
+        local targetRoot, prompt = deliveryTarget()
+
+        if not targetRoot then
+            local workerRoot = findWorkerRoot()
+
+            if not workerRoot then
+                setWaiting("Worker.HumanoidRootPart is not loaded yet.")
+                pause(1, generation)
+                return
+            end
+
+            controller.Status = "Moving to Worker to accept a job"
+
+            if not moveNear(workerRoot, generation) then
+                return
+            end
+
+            controller.Status = "Accepting delivery job from Worker"
+            targetRoot, prompt = requestJob(workerRoot, generation)
+        end
+
+        if not targetRoot or not active(generation) then
+            return
+        end
+
+        controller.Status = "Delivering to " .. targetRoot.Parent.Name
+
+        if not moveNear(targetRoot, generation) or not prompt.Parent or not prompt.Enabled then
+            return
+        end
+
+        controller.Status = "Waiting 4.5 seconds before interacting with the delivery NPC"
+
+        if not pause(4.5, generation) or not targetRoot.Parent or not prompt.Parent or not prompt.Enabled then
+            return
+        end
+
+        if not completeDelivery(targetRoot, prompt, generation) then
+            return
+        end
+
+        controller.HasCompletedDelivery = true
+        controller.Status = "Returning to Worker"
+        local workerRoot = findWorkerRoot()
+
+        if workerRoot and workerRoot:IsA("BasePart") then
+            if not moveNear(workerRoot, generation) then
+                return
+            end
+        end
+
+        if workerRoot and active(generation) then
+            controller.Status = "Checking next job wait time with Worker"
+            requestJob(workerRoot, generation)
+        end
+    end
+
+    function controller:Stop()
+        local wasEnabled = self.Enabled
         self.Enabled = false
+        self.Generation = self.Generation + 1
+        self.Status = "Stopped"
+
+        if self.ActivePrompt then
+            pcall(function()
+                self.ActivePrompt:InputHoldEnd()
+            end)
+            self.ActivePrompt = nil
+        end
+
         scope:Clean()
-        context.Notify({ Title = "Auto Farm", Content = message, Duration = 4 })
+        restoreCharacter()
+
+        if wasEnabled then
+            context.Notify({ Title = "Delivery Farm", Content = "Stopped", Duration = 2 })
+        end
     end
 
     function controller:Start()
-        if self.Enabled then
-            return
-        end
-
-        local character = context.Player.Character
-        local root = character and character:FindFirstChild("HumanoidRootPart")
-        local bestName = self:GetBestOwnedScooter()
-        local spawnRemote = scooterRemote(context, "SpawnScooter")
-
-        if not root then
-            return
-        end
-
-        if not bestName then
-            context.Notify({ Title = "Auto Farm", Content = "No scooters owned.", Duration = 3 })
-            return
-        end
-
-        if not spawnRemote then
+        if self.Enabled or context.Destroying then
             return
         end
 
         self.Enabled = true
         self.Generation = self.Generation + 1
-        self.BestScooter = bestName
-        self.FinalTopSpeed = self:GetScooterFinalTopSpeed(bestName)
-        self.CurrentSteerValue = nil
+        self.Status = "Starting delivery farm"
+        self.HasCompletedDelivery = false
+        local generation = self.Generation
+        context.Notify({ Title = "Delivery Farm", Content = "Delivery loop started. Waiting only for the game's job countdown between deliveries.", Duration = 4 })
+
+        scope:Connect(context.RunService.PreSimulation, maintainStability)
+        scope:Connect(context.Player.CharacterRemoving, restoreCharacter)
 
         scope:Spawn(function()
             local success, message = xpcall(function()
-                if root:FindFirstChild("ScooterMountWeld") then
-                    sendScooterInput(context, 0, true)
-                    task.wait(1.2)
-                end
-
-                if not self.Enabled then
-                    return
-                end
-
-                self:DestroyLocalScooter()
-                task.wait(0.3)
-                spawnRemote:FireServer(bestName)
-
-                local scooter
-                local deadline = os.clock() + 15
-
-                repeat
-                    scooter = findOwnedScooter(context)
-
-                    if not scooter then
-                        task.wait(0.2)
+                while active(generation) do
+                    if characterParts() then
+                        runDelivery(generation)
+                    else
+                        controller.Status = "Waiting for your character"
                     end
-                until scooter or not self.Enabled or os.clock() >= deadline
 
-                if not self.Enabled then
-                    return
-                end
-
-                if not scooter then
-                    self:Fail("Scooter never appeared.")
-                    return
-                end
-
-                self.Scooter = scooter
-                task.wait(0.3)
-
-                if not prepareMountPrompt(scooter) then
-                    self:Fail("No mount prompt.")
-                    return
-                end
-
-                if not self:MountScooter(scooter, 12, 0.5) then
-                    self:Fail("Failed to mount.")
-                    return
-                end
-
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
-
-                if humanoid then
-                    savedJump = {
-                        Humanoid = humanoid,
-                        JumpPower = humanoid.JumpPower,
-                        JumpHeight = humanoid.JumpHeight,
-                    }
-
-                    humanoid.JumpPower = 0
-                    humanoid.JumpHeight = 0
-                end
-
-                self.CurrentSteerValue = 0
-                scope:Connect(context.RunService.Heartbeat, function()
-                    self:UpdateSteering()
-                end)
-
-                scope:Spawn(function()
-                    while self.Enabled do
-                        task.wait(0.5)
-                        local mounted = findMountedScooter(context.Player)
-
-                        if not mounted and self.Enabled then
-                            local available = findOwnedScooter(context)
-
-                            if not available then
-                                spawnRemote:FireServer(bestName)
-                                local retryDeadline = os.clock() + 6
-
-                                repeat
-                                    task.wait(0.2)
-                                    available = findOwnedScooter(context)
-                                until available or not self.Enabled or os.clock() >= retryDeadline
-                            end
-
-                            if available and self.Enabled then
-                                self:MountScooter(available, 6, 0.3)
-                            end
-                        end
+                    if not pause(0.25, generation) then
+                        return
                     end
-                end)
-
-                context.Notify({
-                    Title = "Auto Farm",
-                    Content = "Circling on " .. bestName .. " (top " .. self.FinalTopSpeed .. " km/h)",
-                    Duration = 3,
-                })
+                end
             end, describeError)
 
-            if not success then
-                self:Fail(tostring(message))
-            end
-        end)
-    end
-
-    function controller:Stop()
-        if not self.Enabled then
-            return
-        end
-
-        self.Enabled = false
-        self.Generation = self.Generation + 1
-        self.CurrentSteerValue = nil
-        local generation = self.Generation
-        scope:Clean()
-
-        if savedJump and savedJump.Humanoid.Parent then
-            savedJump.Humanoid.JumpPower = savedJump.JumpPower
-            savedJump.Humanoid.JumpHeight = savedJump.JumpHeight
-        end
-
-        savedJump = nil
-        pcall(sendScooterInput, context, 0, true)
-        self.Scooter = nil
-        self.Body = nil
-
-        task.spawn(function()
-            task.wait(0.5)
-
-            if self.Generation ~= generation then
-                return
-            end
-
-            self:DestroyLocalScooter()
-            task.wait(0.2)
-
-            if self.Generation == generation then
-                local character = context.Player.Character
-                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
-                if humanoid then
-                    humanoid.Health = 0
-                end
-
-                context.Notify({ Title = "Auto Farm", Content = "Stopped", Duration = 2 })
+            if not success and active(generation) then
+                controller:Stop()
+                context.Notify({ Title = "Delivery Farm", Content = "Stopped after an error. Check the console for details.", Duration = 5 })
             end
         end)
     end
 
     function controller:Destroy()
         self:Stop()
-        scope:Clean()
     end
 
     return controller
@@ -1492,9 +1746,7 @@ local function createSpeedDisplay(context)
     local visibleHudLabel
     local originalHudVisibility
     local expectedHudText
-    local lastError
     local lastDashboardScan = -math.huge
-    local lastStatus = -math.huge
     local retryAfter = -math.huge
     local multiplier = 1
     local refreshing = false
@@ -1503,15 +1755,7 @@ local function createSpeedDisplay(context)
     local requestRefresh
     local renderBinding = "LelSpeedDisplay_" .. tostring(context.Player.UserId)
 
-    local function log(...)
-        print("[Speedo]", ...)
-    end
-
-    local function reportError(message)
-        if message ~= lastError then
-            warn("[Speedo]", message)
-            lastError = message
-        end
+    local function reportError()
     end
 
     local function transparencyProperty(segment)
@@ -1810,7 +2054,6 @@ local function createSpeedDisplay(context)
             end
         end
 
-        log("Dashboard digits:", #digitFrames, "Number assignments:", #numberCandidates)
     end
 
     local function bindDashboard(root, frames, owner)
@@ -1843,7 +2086,6 @@ local function createSpeedDisplay(context)
             table.insert(digitFrames, digit)
         end
 
-        log("Dashboard:", root:GetFullName())
         buildNumberCandidates()
     end
 
@@ -2001,14 +2243,6 @@ local function createSpeedDisplay(context)
             clearDigitOverlays()
             selectedCandidate = bestCandidate
             controller.Calibrated = true
-            log("Speed display selected. HUD:", hudSpeed)
-
-            for index, digit in ipairs(selectedCandidate.Digits) do
-                log("Place:", 10 ^ (3 - index), digit.Frame:GetFullName())
-            end
-        elseif now - lastStatus >= 2 then
-            lastStatus = now
-            log("Matching dashboard digits against raw HUD speed:", hudSpeed)
         end
     end
 
@@ -2123,11 +2357,6 @@ local function createSpeedDisplay(context)
         updateHud(rawSpeed)
 
         if not dashboardRoot or not dashboardRoot.Parent or #digitFrames == 0 then
-            if os.clock() - lastStatus >= 3 then
-                lastStatus = os.clock()
-                log("Waiting for dashboard A-G frames. Raw HUD:", rawSpeed)
-            end
-
             return
         end
 
@@ -2309,7 +2538,7 @@ local function populateInterface(interface, speedBoost, quests, autoFarm, player
         end
     end)
 
-    interface:AddToggle(farmSection, "Auto Farm Money", "AutoFarm_Enabled", function(enabled)
+    interface:AddToggle(farmSection, "Auto Farm Deliveries", "AutoFarm_Enabled", function(enabled)
         if enabled then
             autoFarm:Start()
         else
