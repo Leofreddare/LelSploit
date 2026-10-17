@@ -165,17 +165,20 @@ local function installLelHubControls(library, window, configuration)
         end
     end
 
-    local utilityTab = ui(window, "Tab", { Title = "Utilities", Icon = "sparkles" })
+    local utilityTab = configuration.PlayerTab or ui(window, "Tab", { Title = configuration.BasicMovement and "Player" or "Utilities", Icon = "user" })
     local movement = ui(utilityTab, "Section", "Movement")
 
     if configuration.BasicMovement then
         for _, entry in ipairs({ { "WalkSpeed", "Walk speed", 16, 16, 500 }, { "JumpPower", "Jump power", 50, 0, 500 }, { "HipHeight", "Hip height", 2, 0, 50 } }) do
             local property = entry[1]
-            slider(movement, property, entry[2], entry[3], entry[4], entry[5], function(value)
-                basicValues[property] = value
-            end)
+            if not configuration.Skip or not configuration.Skip[property] then
+                slider(movement, property, entry[2], entry[3], entry[4], entry[5], function(value)
+                    basicValues[property] = value
+                end)
+            end
         end
 
+        if not configuration.Skip or not configuration.Skip.Noclip then
         toggle(movement, "Noclip", "Noclip", function(value)
             basicFlags.Noclip = value
 
@@ -183,9 +186,12 @@ local function installLelHubControls(library, window, configuration)
                 restoreBasicCollisions()
             end
         end)
+        end
+        if not configuration.Skip or not configuration.Skip.InfiniteJump then
         toggle(movement, "InfiniteJump", "Infinite jump", function(value)
             basicFlags.InfiniteJump = value
         end)
+        end
         toggle(movement, "Fly", "Fly", function(value)
             basicFlags.Fly = value
 
@@ -395,6 +401,138 @@ local function installLelHubControls(library, window, configuration)
         end
     end)
 
+    local savedLight
+    local fullbright = false
+    local antiIdle = false
+    local selectedPlayer
+    local spectating = false
+    local savedSubject
+    local savedCameraType
+    local outlines = {}
+    local outlinesEnabled = false
+    local function restoreSpectate()
+        if spectating then
+            local camera = workspace.CurrentCamera
+            local _, humanoid = parts()
+            if camera then
+                camera.CameraType = savedCameraType or Enum.CameraType.Custom
+                camera.CameraSubject = savedSubject and savedSubject.Parent and savedSubject or humanoid
+            end
+        end
+        spectating = false
+    end
+    local function restoreLight()
+        if savedLight then
+            local lighting = game:GetService("Lighting")
+            for property, value in pairs(savedLight) do lighting[property] = value end
+            savedLight = nil
+        end
+    end
+    if configuration.BasicMovement then
+        local worldControls = ui(utilityTab, "Section", "World")
+        if not configuration.Skip or not configuration.Skip.Fullbright then
+            toggle(worldControls, "Fullbright", "Fullbright", function(value)
+                fullbright = value
+                if value then
+                    local lighting = game:GetService("Lighting")
+                    savedLight = savedLight or { Brightness = lighting.Brightness, ClockTime = lighting.ClockTime, GlobalShadows = lighting.GlobalShadows, Ambient = lighting.Ambient }
+                else restoreLight() end
+            end)
+        end
+        if not configuration.Skip or not configuration.Skip.AntiIdle then
+            toggle(worldControls, "AntiIdle", "Anti-idle", function(value) antiIdle = value end)
+        end
+        button(worldControls, "Give teleport tool", function()
+            local backpack = player:FindFirstChildOfClass("Backpack")
+            if not backpack then return "Backpack is not ready." end
+            local old = backpack:FindFirstChild("LelHub Teleport") or (player.Character and player.Character:FindFirstChild("LelHub Teleport"))
+            if old then old:Destroy() end
+            local tool = Instance.new("Tool")
+            tool.Name, tool.RequiresHandle, tool.CanBeDropped = "LelHub Teleport", false, false
+            connect(tool.Activated, function()
+                local _, humanoid, root = parts()
+                if root and humanoid and not humanoid.SeatPart then root.CFrame = player:GetMouse().Hit + Vector3.new(0, 3, 0) end
+            end)
+            tool.Parent = backpack
+        end)
+        local playersTab = ui(window, "Tab", { Title = "Players", Icon = "users" })
+        local names = { "Select a player" }
+        local playerDropdown
+        local function refreshPlayers(leaving)
+            names = { "Select a player" }
+            for _, target in ipairs(players:GetPlayers()) do
+                if target ~= player and target ~= leaving then table.insert(names, target.Name) end
+            end
+            table.sort(names)
+            if playerDropdown then playerDropdown:SetValues(names) end
+        end
+        refreshPlayers()
+        playerDropdown = register(playersTab, "Dropdown", "TargetPlayer", { Title = "Player", Values = names, Default = "Select a player", Multi = false }, function(value)
+            selectedPlayer = value ~= "Select a player" and players:FindFirstChild(value) or nil
+        end)
+        button(playersTab, "Teleport near player", function()
+            local root = selectedPlayer and selectedPlayer.Character and selectedPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if not root then return "Select an available player." end
+            return teleport(root.CFrame * CFrame.new(0, 0, 4))
+        end)
+        button(playersTab, "Spectate player", function()
+            local humanoid = selectedPlayer and selectedPlayer.Character and selectedPlayer.Character:FindFirstChildOfClass("Humanoid")
+            local camera = workspace.CurrentCamera
+            if not humanoid or not camera then return "Select an available player." end
+            if not spectating then savedSubject, savedCameraType = camera.CameraSubject, camera.CameraType end
+            spectating = true
+            camera.CameraType, camera.CameraSubject = Enum.CameraType.Custom, humanoid
+        end)
+        button(playersTab, "Stop spectating", restoreSpectate)
+        toggle(playersTab, "PlayerOutlines", "Player outlines", function(value) outlinesEnabled = value end)
+        connect(players.PlayerAdded, function() refreshPlayers() end)
+        connect(players.PlayerRemoving, function(target)
+            refreshPlayers(target)
+            if selectedPlayer == target then restoreSpectate() selectedPlayer = nil end
+            local entry = outlines[target]
+            if entry then entry:Destroy() outlines[target] = nil end
+        end)
+        connect(player.Idled, function()
+            if antiIdle then
+                pcall(function()
+                    local virtual = game:GetService("VirtualUser")
+                    virtual:CaptureController()
+                    virtual:ClickButton2(Vector2.new(0, 0))
+                end)
+            end
+        end)
+    end
+    local extrasElapsed = 0
+    connect(runService.Heartbeat, function(deltaTime)
+        extrasElapsed = extrasElapsed + deltaTime
+        if extrasElapsed < 0.2 then return end
+        extrasElapsed = 0
+        if fullbright then
+            local lighting = game:GetService("Lighting")
+            lighting.Brightness, lighting.ClockTime, lighting.GlobalShadows, lighting.Ambient = 3, 12, false, Color3.fromRGB(210, 210, 210)
+        end
+        if spectating then
+            local humanoid = selectedPlayer and selectedPlayer.Character and selectedPlayer.Character:FindFirstChildOfClass("Humanoid")
+            local camera = workspace.CurrentCamera
+            if humanoid and camera then camera.CameraSubject = humanoid end
+        end
+        for _, target in ipairs(players:GetPlayers()) do
+            if target ~= player then
+                local character = target.Character
+                local entry = outlines[target]
+                if entry and (not outlinesEnabled or entry.Parent ~= character) then entry:Destroy() outlines[target] = nil entry = nil end
+                if outlinesEnabled and character and not entry then
+                    entry = Instance.new("Highlight")
+                    entry.Name, entry.Adornee, entry.Parent = "LelHubSharedOutline", character, character
+                    entry.FillTransparency = 1
+                    entry.OutlineColor = Color3.fromRGB(120, 160, 255)
+                    entry.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                    outlines[target] = entry
+                end
+            end
+        end
+    end)
+
     local settingsTab = configuration.SettingsTab or ui(window, "Tab", { Title = "Settings", Icon = "settings" })
     local appearance = ui(settingsTab, "Section", "Appearance")
     register(appearance, "Dropdown", "Theme", { Title = "Theme", Values = library.Themes or { "Dark", "Light" }, Default = library.Theme or "Dark", Multi = false }, function(value)
@@ -519,6 +657,43 @@ local function installLelHubControls(library, window, configuration)
         return "Settings loaded."
     end)
 
+    local moduleSection = ui(settingsTab, "Section", "Hubs")
+    local moduleEnvironment = type(getgenv) == "function" and getgenv() or _G
+    local catalog = moduleEnvironment.LelHubCatalog or {
+        { Name = "Global", File = "global.luau" },
+        { Name = "Universal Enhancements", File = "Universal_Enhancements.luau" },
+        { Name = "Client Tools", File = "Client_Tools.luau" },
+    }
+    local moduleNames, moduleFiles = {}, {}
+    for _, entry in ipairs(catalog) do
+        if not entry.PlaceId or entry.PlaceId == game.PlaceId or entry.UniverseId == game.GameId then
+            table.insert(moduleNames, entry.Name)
+            moduleFiles[entry.Name] = entry.File
+        end
+    end
+    local moduleChoice = moduleNames[1]
+    register(moduleSection, "Dropdown", "HubChoice", { Title = "Choose hub", Values = moduleNames, Default = moduleChoice, Multi = false }, function(value)
+        moduleChoice = value
+    end)
+    button(moduleSection, "Open selected hub", function()
+        local file = moduleFiles[moduleChoice]
+        if not file then return "Select a hub first." end
+        local function closeCurrent()
+            if configuration.Cleanup then configuration.Cleanup()
+            elseif not library.Unloaded then library:Destroy() end
+        end
+        local loader = moduleEnvironment.LelHubLoader
+        if loader and type(loader.LoadModule) == "function" then
+            loader.LoadModule(file, closeCurrent)
+            return
+        end
+        local source = game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/" .. file)
+        local chunk, message = loadstring(source, "LelHub/" .. file)
+        if not chunk then return "The selected hub could not compile." end
+        closeCurrent()
+        chunk()
+    end)
+
     local function cleanup()
         if destroyed then
             return
@@ -542,6 +717,13 @@ local function installLelHubControls(library, window, configuration)
 
         releaseSprint()
         releaseSpin()
+        restoreSpectate()
+        restoreLight()
+        for target, highlight in pairs(outlines) do highlight:Destroy() outlines[target] = nil end
+        local character = player.Character
+        local backpack = player:FindFirstChildOfClass("Backpack")
+        local teleportTool = (character and character:FindFirstChild("LelHub Teleport")) or (backpack and backpack:FindFirstChild("LelHub Teleport"))
+        if teleportTool then teleportTool:Destroy() end
         if state.AutoWalk then
             local _, humanoid = parts()
 
