@@ -17,8 +17,70 @@ local games = {
     { Name = "Fluxo PVP", PlaceId = 99001115434148, UniverseId = 8856451375, File = "Fluxo_PVP.luau" },
     { Name = "Blade Ball", PlaceId = 13772394625, UniverseId = 4777817887, File = "Blade_Ball.luau" },
     { Name = "Murder Mystery 2", PlaceId = 142823291, UniverseId = 66654135, File = "Murder_Mystery_2.luau" },
+    { Name = "Natural Disaster Survival", PlaceId = 189707, File = "Natural_Disaster_Survival.luau" },
+    { Name = "Rising of Aliens", PlaceId = 99365835174711, File = "Rising_of_Aliens.luau" },
 }
 local catalog = {
+    { Name = "Empire Clash", File = "Empire_Clash.luau", Game = true },
+    { Name = "Crop Incremental", File = "Crop_Incremental.luau", Game = true },
+    { Name = "Fix It Up!", File = "Fix_It_Up.luau", Game = true },
+    { Name = "Forsaken", File = "Forsaken.luau", Game = true },
+    { Name = "BORDER Military Roleplay", File = "BORDER_Military_Roleplay.luau", Game = true },
+    { Name = "Slap Battles", File = "Slap_Battles.luau", Game = true },
+    { Name = "Phonk Clicker!", File = "Phonk_Clicker.luau", Game = true },
+    { Name = "THA BRONX 3", File = "THA_BRONX_3.luau", Game = true },
+    { Name = "Wanted", File = "Wanted.luau", Game = true },
+    { Name = "Loomian Legacy", File = "Loomian_Legacy.luau", Game = true },
+    { Name = "Tsunami Game", File = "Tsunami_Game.luau", Game = true },
+    { Name = "Voxels", File = "Voxels.luau", Game = true },
+    { Name = "Build a Brainrot", File = "Build_a_Brainrot.luau", Game = true },
+    { Name = "Survive Zombie Arena", File = "Survive_Zombie_Arena.luau", Game = true },
+    { Name = "Emergency Hamburg", File = "Emergency_Hamburg.luau", Game = true },
+    { Name = "Counter Blox", File = "Counter_Blox.luau", Game = true },
+    { Name = "Combat Warriors", File = "Combat_Warriors.luau", Game = true },
+    { Name = "Pixel Blade", File = "Pixel_Blade.luau", Game = true },
+    { Name = "PLS DONATE", File = "PLS_DONATE.luau", Game = true },
+    { Name = "Build A Boat For Treasure", File = "Build_A_Boat_For_Treasure.luau", Game = true },
+    { Name = "Poop a Big Poop", File = "Poop_a_Big_Poop.luau", Game = true },
+    { Name = "Anime Vanguards", File = "Anime_Vanguards.luau", Game = true },
+    { Name = "Apocalypse Rising 2", File = "Apocalypse_Rising_2.luau", Game = true },
+    { Name = "Survive Homelander", File = "Survive_Homelander.luau", Game = true },
+    { Name = "My Knife Farm", File = "My_Knife_Farm.luau", Game = true },
+    { Name = "Split The Sea", File = "Split_The_Sea.luau", Game = true },
+    { Name = "Reign Fall", File = "Reign_Fall.luau", Game = true },
+    { Name = "Build and Crash", File = "Build_and_Crash.luau", Game = true },
+    { Name = "Be Dino - Jurassic Dinosaur Simulation", File = "Be_Dino_Jurassic_Dinosaur_Simulation.luau", Game = true },
+    { Name = "Prison Life", File = "Prison_Life.luau", Game = true },
+    { Name = "Jujutsu Shenanigans", File = "Jujutsu_Shenanigans.luau", Game = true },
+    { Name = "Infinite Pizza Clicker", File = "Infinite_Pizza_Clicker.luau", Game = true },
+    { Name = "Wizard Alchemy", File = "Wizard_Alchemy.luau", Game = true },
+    { Name = "Death Ball", File = "Death_Ball.luau", Game = true },
+    { Name = "Anime Arise Evolution", File = "Anime_Arise_Evolution.luau", Game = true },
+    { Name = "DOORS", File = "DOORS.luau", Game = true },
+    { Name = "Criminality", File = "Criminality.luau", Game = true },
+    { Name = "Jailbird", File = "Jailbird.luau", Game = true },
+    { Name = "Pool Incremental", File = "Pool_Incremental.luau", Game = true },
+    { Name = "Scoped", File = "Scoped.luau", Game = true },
+    { Name = "Giant Simulator", File = "Giant_Simulator.luau", Game = true },
+    { Name = "Supermarket Together", File = "Supermarket_Together.luau", Game = true },
+    { Name = "Infinite Nights With Freddy (DOOM)", File = "Infinite_Nights_With_Freddy_DOOM.luau", Game = true },
+    { Name = "The Classic Soccer", File = "The_Classic_Soccer.luau", Game = true },
+    { Name = "Become Hungry Worm", File = "Become_Hungry_Worm.luau", Game = true },
+    { Name = "Clicking Simulator Ultimate", File = "Clicking_Simulator_Ultimate.luau", Game = true },
+    { Name = "RIVALS", File = "RIVALS.luau", Game = true },
+    { Name = "Missile Wars", File = "Missile_Wars.luau", Game = true },
+    { Name = "Schedule", File = "Schedule.luau", Game = true },
+    { Name = "Jailbreak", File = "Jailbreak.luau", Game = true },
+    { Name = "Femboy Simulator", File = "Femboy_Simulator.luau", Game = true },
+    { Name = "Fallen Survival", File = "Fallen_Survival.luau", Game = true },
+    { Name = "Mad City", File = "Mad_City.luau", Game = true },
+    { Name = "Steal a Kitty!", File = "Steal_a_Kitty.luau", Game = true },
+    { Name = "Anime Waifu Card Collection", File = "Anime_Waifu_Card_Collection.luau", Game = true },
+    { Name = "Project Delta", File = "Project_Delta.luau", Game = true },
+    { Name = "+$1,000 Every Correct Glass", File = "1000_Every_Correct_Glass.luau", Game = true },
+    { Name = "Soccer Zero", File = "Soccer_Zero.luau", Game = true },
+    { Name = "Free Admin Troll Tower", File = "Free_Admin_Troll_Tower.luau", Game = true },
+    { Name = "Sniper Arena", File = "Sniper_Arena.luau", Game = true },
     { Name = "Global", File = "global.luau" },
     { Name = "Universal Enhancements", File = "Universal_Enhancements.luau" },
     { Name = "Client Tools", File = "Client_Tools.luau" },
@@ -29,9 +91,28 @@ for _, entry in ipairs(catalog) do allowedFiles[entry.File] = entry.Name end
 environment.LelHubCatalog = catalog
 local places, universes = {}, {}
 for _, entry in ipairs(games) do
-    places[entry.PlaceId], universes[entry.UniverseId] = entry, entry
+    if entry.PlaceId then places[entry.PlaceId] = entry end
+    if entry.UniverseId then universes[entry.UniverseId] = entry end
 end
 local selected = places[game.PlaceId] or universes[game.GameId]
+if not selected then
+    local function normalize(name)
+        return tostring(name):lower():gsub("%b[]", ""):gsub("%b()", ""):gsub("[^%w]", "")
+    end
+    local success, information = pcall(function()
+        local marketplace = game:GetService("MarketplaceService")
+        return marketplace:GetProductInfo(game.PlaceId, Enum.InfoType.Asset)
+    end)
+    if success and type(information) == "table" and type(information.Name) == "string" then
+        local placeName = normalize(information.Name)
+        for _, entry in ipairs(catalog) do
+            if (entry.Game or entry.PlaceId) and normalize(entry.Name) == placeName then
+                selected = entry
+                break
+            end
+        end
+    end
+end
 
 local function notify(message)
     task.spawn(function()

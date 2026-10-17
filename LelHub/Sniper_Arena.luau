@@ -1,0 +1,112 @@
+local environment = type(getgenv) == "function" and getgenv() or _G
+local runtime = environment.LelHubGameRuntime
+if not runtime then
+    local source = game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/LelHubRuntime.luau")
+    local chunk, message = loadstring(source, "LelHub/Runtime")
+    assert(chunk, message)
+    runtime = chunk()
+    environment.LelHubGameRuntime = runtime
+end
+
+return runtime.Open({ Name = "Sniper Arena", Style = "Native", Parameters = {}, Action = "Enable game features" }, [====[
+local RS_but_cooler = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("ReplicatedStorage")
+local CC = workspace.CurrentCamera
+
+workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+    CC = workspace.CurrentCamera
+end)
+
+local FOV = 180
+local Circle = Drawing.new("Circle")
+Circle.Visible = true
+Circle.Thickness = 1
+Circle.Radius = FOV
+Circle.Transparency = 0.7
+Circle.Color = Color3.fromRGB(255, 255, 255)
+Circle.Filled = false
+Circle.NumSides = 64
+
+local ES = require(RS.Remote.EntityService)
+local CSC = require(RS.Client.CombatController.ClientComponent.ClientShootableComponent)
+
+local thingy = nil
+
+local function target()
+    local LocalEntity = ES.GetLocalEntity()
+    if not LocalEntity or not LocalEntity.World or not LocalEntity.World.EntitiesByTeam then return nil end
+    local MousePos = UIS:GetMouseLocation()
+    local closestDis = FOV
+    local ClosestTarget = nil
+    for _, TeamDict in pairs(LocalEntity.World.EntitiesByTeam) do
+        local Items = TeamDict._items or TeamDict
+        for _, Entity in pairs(Items) do
+            if not ES.IsLocalEntity(Entity) and Entity:IsAlive() then
+                local Inst = Entity.Instance
+                local Character = (Inst and Inst:IsA("Player")) and Inst.Character or Inst
+                if Character then
+                    local Humanoid = Character:FindFirstChildOfClass("Humanoid")
+                    if Humanoid and Humanoid.Health > 0 then
+                        local Part = Character:FindFirstChild("HumanoidRootPart") or Character:FindFirstChild("Head")
+                        if Part and Part:IsA("BasePart") then
+                            local ScreenPos, OnScreen = CC:WorldToViewportPoint(Part.Position)
+                            if OnScreen then
+                                local Distance = (Vector2.new(ScreenPos.X, ScreenPos.Y) - MousePos).Magnitude
+                                if Distance <= closestDis then
+                                    closestDis = Distance
+                                    ClosestTarget = { Part = Part, Position = Part.Position }
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return ClosestTarget
+end
+
+local function upvalues(func)
+    for i, val in ipairs(debug.getupvalues(func)) do
+        if type(val) == "function" then
+            local ok, ret1, ret2, ret3 = pcall(val)
+            if ok then
+                if typeof(ret1) == "CFrame" and typeof(ret3) == "table" then
+                    local OldOriginFn = val
+                    debug.setupvalue(func, i, function(...)
+                        local cf, pos, meta = OldOriginFn(...)
+                        if thingy then
+                            return CFrame.lookAt(cf.Position, thingy.Position), pos, meta
+                        end
+                        return cf, pos, meta
+                    end)
+                elseif typeof(ret1) == "Vector3" and typeof(ret2) == "Instance" then
+                    local OldTargetFn = val
+                    debug.setupvalue(func, i, function(...)
+                        if thingy then
+                            return thingy.Position, thingy.Part
+                        end
+                        return OldTargetFn(...)
+                    end)
+                end
+            end
+        end
+    end
+end
+
+local LS = CSC.LocalShoot
+upvalues(LS)
+upvalues(CSC.Shoot)
+
+local hook; hook = hookfunction(LS, function(Self, ...)
+    thingy = target()
+    local result = hook(Self, ...)
+    thingy = nil
+    return result
+end)
+
+RS_but_cooler.RenderStepped:Connect(function()
+    Circle.Position = UIS:GetMouseLocation()
+end)
+]====])

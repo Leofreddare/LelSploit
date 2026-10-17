@@ -925,7 +925,7 @@ local function createLelHub(name)
     local previous = environment.LelHubModules[name]
     if previous then previous.Cleanup() end
     local library = loadstring(game:HttpGetAsync("https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau"))()
-    local window = library:CreateWindow({ Title = "LelHub", SubTitle = "by LelSploit", Size = UDim2.fromOffset(680, 470), MinSize = Vector2.new(480, 360), TabWidth = 155, Resize = true, Acrylic = false, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightShift })
+    local window = library:CreateWindow({ Title = "LelHub Violence District", SubTitle = "by LelSploit", Size = UDim2.fromOffset(680, 470), MinSize = Vector2.new(480, 360), TabWidth = 155, Resize = true, Acrylic = false, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightShift })
     local hub = { Library = library, Window = window, Connections = {}, Resources = {}, Tabs = {}, Controls = {}, Stopped = false }
     local serial = 0
     function hub:Connect(signal, callback)
@@ -3367,8 +3367,8 @@ local function BuildInterface()
     xDTaraZ.Library = Library
     T = function(en, th) return Library:T(en, th) end
     Library:CreateWindow({
-        Title = "LelHub",
-        SubTitle = "Violence District by xDTaraZ",
+        Title = "LelHub Violence District",
+        SubTitle = "by LelSploit",
         MenuKey = Enum.KeyCode.RightShift,
         ConfigFolder = xDTaraZ.Config.SaveFolder,
         Language = "Auto",

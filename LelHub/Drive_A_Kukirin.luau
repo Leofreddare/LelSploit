@@ -1178,8 +1178,8 @@ local function createInterface(context)
     local libraryUrl = "https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau"
     local library = loadstring(game:HttpGetAsync(libraryUrl))()
     local window = library:CreateWindow({
-        Title = "LelHub Kukirin",
-        SubTitle = "",
+        Title = "LelHub Drive A Kukirin",
+        SubTitle = "by LelSploit",
         TabWidth = 160,
         Size = UDim2.fromOffset(670, 460),
         Resize = true,

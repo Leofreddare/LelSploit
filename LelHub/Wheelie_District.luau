@@ -750,8 +750,8 @@ end
 
 local Library = loadstring(game:HttpGetAsync("https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau"))()
 local Window = Library:CreateWindow({
-    Title = "LelHub Wheelie",
-    SubTitle = "",
+    Title = "LelHub Wheelie District",
+    SubTitle = "by LelSploit",
     TabWidth = 150,
     Size = UDim2.fromOffset(670, 460),
     MinSize = Vector2.new(480, 360),

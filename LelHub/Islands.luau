@@ -745,8 +745,8 @@ end
 local Library = loadstring(game:HttpGetAsync("https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau"))()
 
 local Window = Library:CreateWindow{
-    Title = "LelHub",
-    SubTitle = "",
+    Title = "LelHub Islands",
+    SubTitle = "by LelSploit",
     TabWidth = 150,
     Size = UDim2.fromOffset(670, 460),
     Resize = true,

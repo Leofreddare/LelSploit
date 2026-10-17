@@ -2814,7 +2814,7 @@ local function launch()
 
     local initialized, message = xpcall(function()
         local window = library:CreateWindow({
-            Title = "LelHub",
+            Title = "LelHub Universal Enhancements",
             SubTitle = "by LelSploit",
             TabWidth = 150,
             Size = UDim2.fromOffset(670, 460),
