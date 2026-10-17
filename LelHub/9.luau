@@ -2,31 +2,69 @@ local function lelHubTitle(value)
     local title = tostring(value or "")
     title = title:gsub("<[^>]*>", ""):gsub("_", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
     local names = {
-        ["WalkSpeed"] = "Walk speed", ["Walk Speed"] = "Walk speed",
-        ["JumpPower"] = "Jump power", ["NoClip"] = "Walk through walls", ["Noclip"] = "Walk through walls",
-        ["Fly"] = "Player flight", ["Fly Mode"] = "Player flight", ["Fly Speed"] = "Flight speed", ["Fly speed"] = "Flight speed",
-        ["Spin"] = "Spin character", ["Auto walk"] = "Walk forward automatically",
-        ["Fullbright"] = "Full brightness", ["Fullbright Intensity"] = "Brightness level",
-        ["Door ESP"] = "Highlight doors", ["Objective ESP"] = "Highlight objectives",
-        ["Entity Highlight"] = "Highlight entities", ["Gold Highlight"] = "Highlight gold",
-        ["Item Highlight"] = "Highlight items", ["Hiding ESP"] = "Highlight hiding spots",
-        ["ToolShed ESP"] = "Highlight tool sheds", ["Player ESP"] = "Highlight players",
-        ["Rainbow ESP"] = "Rainbow highlight colors", ["Enable Text"] = "Show highlight labels",
-        ["Text Size"] = "Label text size", ["Text Offset Y"] = "Label vertical offset",
-        ["Max ESP Distance"] = "Highlight distance limit", ["Anti CamShake"] = "Disable camera shake",
-        ["Aura"] = "Attack nearby enemies", ["Aura mode"] = "Attack targeting mode",
-        ["Aura radius"] = "Attack radius", ["Speed"] = "Enable speed override",
-        ["Collect speed"] = "Food collection travel speed", ["Auto guitar"] = "Play guitar automatically",
-        ["Farm wins"] = "Farm wins automatically", ["Fast parry"] = "Parry continuously",
-        ["Destroy UI"] = "Unload LelHub", ["Unload"] = "Unload LelHub",
-        ["Names and roles"] = "Show player labels", ["Ball ESP (Highlight)"] = "Highlight ball",
-        ["Ring ESP"] = "Highlight rings", ["Master Sell Loop"] = "Sell selected items automatically",
-        ["Auto Spam Spins"] = "Spin automatically", ["Remove All Knives"] = "Remove knives from plot",
-        ["Include Inventory in Loop"] = "Include inventory when selling",
-        ["Auto Collect GradeTokens"] = "Collect grade tokens automatically",
-        ["Auto Collect Cash"] = "Collect cash automatically", ["Auto Open Ready Packs"] = "Open ready packs automatically",
+        ["Walk speed"] = "WalkSpeed", ["Walk Speed"] = "WalkSpeed", ["WalkSpeed"] = "WalkSpeed",
+        ["Jump power"] = "JumpPower", ["Hip height"] = "HipHeight", ["NoClip"] = "Noclip",
+        ["Fly"] = "Flight", ["Fly Mode"] = "Flight", ["Player flight"] = "Flight",
+        ["Fly Speed"] = "Flight Speed", ["Fly speed"] = "Flight Speed",
+        ["Infinite jump"] = "Infinite Jump", ["Auto walk"] = "Auto Walk", ["Prevent sitting"] = "Anti Sit",
+        ["Hold Shift to sprint"] = "Sprint", ["Sprint speed"] = "Sprint Speed", ["Spin speed"] = "Spin Speed",
+        ["Field of view"] = "Field of View", ["Fullbright Intensity"] = "Brightness",
+        ["Player outlines"] = "Player ESP", ["Entity Highlight"] = "Entity ESP",
+        ["Gold Highlight"] = "Gold ESP", ["Item Highlight"] = "Item ESP", ["ToolShed ESP"] = "Toolshed ESP",
+        ["Rainbow ESP"] = "Rainbow ESP", ["Enable Text"] = "ESP Text", ["Text Size"] = "Text Size",
+        ["Text Offset Y"] = "Text Offset", ["Max ESP Distance"] = "ESP Distance",
+        ["Anti CamShake"] = "No Camera Shake", ["Aura"] = "Kill Aura", ["Aura mode"] = "Aura Mode",
+        ["Aura radius"] = "Aura Radius", ["Speed"] = "Speed Override", ["Collect speed"] = "Collect Speed",
+        ["Auto guitar"] = "Auto Guitar", ["Farm wins"] = "Auto Wins", ["Fast parry"] = "Auto Parry",
+        ["Destroy UI"] = "Unload LelHub", ["Unload"] = "Unload LelHub", ["Ball ESP (Highlight)"] = "Ball ESP",
+        ["Master Sell Loop"] = "Auto Sell", ["Auto Spam Spins"] = "Auto Spin",
+        ["Remove All Knives"] = "Remove Plot Knives", ["Include Inventory in Loop"] = "Sell Inventory",
+        ["Auto Collect GradeTokens"] = "Auto Grade Tokens", ["Auto Collect Cash"] = "Auto Cash",
+        ["Auto Open Ready Packs"] = "Auto Open Packs", ["Hide accessories locally"] = "Hide Accessories",
+        ["Restore movement"] = "Restore Movement", ["Camera zoom distance"] = "Zoom Distance",
+        ["Restore camera zoom"] = "Reset Zoom", ["Return camera to character"] = "Reset Camera",
+        ["Highlight murderer"] = "Murderer ESP", ["Highlight sheriff / gun holder"] = "Sheriff / Hero ESP",
+        ["Highlight innocents"] = "Innocent ESP", ["Show player names"] = "Names",
+        ["Show role labels"] = "Roles", ["Show distance"] = "Distance", ["Include your character"] = "Self ESP",
+        ["Highlight other players"] = "Player ESP", ["Names and distance"] = "Names / Distance",
+        ["Use team colors"] = "Team Colors", ["Vehicle fly"] = "Vehicle Flight",
+        ["Vehicle fly speed"] = "Flight Speed", ["Toggle fly key"] = "Flight Key",
+        ["Highlight transparency"] = "Fill Transparency", ["Refresh highlights"] = "Refresh ESP",
     }
     return names[title] or title
+end
+
+local function installLelHubSpacing(window, connect)
+    local holder = window.ContainerHolder
+    if typeof(holder) ~= "Instance" then return end
+    local seen = {}
+    local function style(object)
+        if seen[object] or not object:IsA("UIListLayout") then return end
+        local container = object.Parent
+        if not container then return end
+        local isTab = container:IsA("ScrollingFrame") and container.Parent == holder
+        local sectionRoot = container.Parent
+        local isSection = sectionRoot and sectionRoot.Parent and sectionRoot.Parent:IsA("ScrollingFrame") and sectionRoot.Parent.Parent == holder and container.Position.Y.Offset == 24
+        if not isTab and not isSection then return end
+        seen[object] = true
+        object.Padding = UDim.new(0, 10)
+        if isTab then
+            local padding = container:FindFirstChildOfClass("UIPadding")
+            if padding then
+                padding.PaddingLeft, padding.PaddingRight = UDim.new(0, 4), UDim.new(0, 14)
+                padding.PaddingTop, padding.PaddingBottom = UDim.new(0, 8), UDim.new(0, 8)
+            end
+            local function resizeCanvas()
+                container.CanvasSize = UDim2.fromOffset(0, object.AbsoluteContentSize.Y + 16)
+            end
+            connect(object:GetPropertyChangedSignal("AbsoluteContentSize"), resizeCanvas)
+            resizeCanvas()
+        end
+    end
+    for _, object in ipairs(holder:GetDescendants()) do style(object) end
+    connect(holder.DescendantAdded, function(object)
+        if object:IsA("UIListLayout") then task.defer(function() if object.Parent then style(object) end end) end
+    end)
 end
 
 local function installLelHubControls(library, window, configuration)
@@ -41,6 +79,8 @@ local function installLelHubControls(library, window, configuration)
     local state = { Sprint = false, SprintSpeed = 32, AutoWalk = false, NoSit = false, Spin = false, SpinSpeed = 90, HideAccessories = false }
     local originals = setmetatable({}, { __mode = "k" })
     local accessoryParts = {}
+    local accessoryConnection
+    local accessoryCharacter
     local sprintHumanoid
     local sprintOriginal
     local spinHumanoid
@@ -66,9 +106,11 @@ local function installLelHubControls(library, window, configuration)
         return connection
     end
 
+    installLelHubSpacing(window, connect)
+
     local function notify(message)
         if not destroyed then
-            library:Notify({ Title = "LelHub", Content = message, Duration = 3 })
+            library:Notify({ Title = lelHubTitle("LelHub"), Content = message, Duration = 3 })
         end
     end
 
@@ -107,11 +149,11 @@ local function installLelHubControls(library, window, configuration)
     end
 
     local function toggle(parent, id, title, callback)
-        return register(parent, "Toggle", id, { Title = title, Default = false }, callback)
+        return register(parent, "Toggle", id, { Title = lelHubTitle(title), Default = false }, callback)
     end
 
     local function slider(parent, id, title, default, minimum, maximum, callback, rounding)
-        return register(parent, "Slider", id, { Title = title, Default = default, Min = minimum, Max = maximum, Rounding = rounding or 0 }, function(value)
+        return register(parent, "Slider", id, { Title = lelHubTitle(title), Default = default, Min = minimum, Max = maximum, Rounding = rounding or 0 }, function(value)
             local number = tonumber(value)
 
             if number and number == number and math.abs(number) ~= math.huge then
@@ -121,7 +163,7 @@ local function installLelHubControls(library, window, configuration)
     end
 
     local function button(parent, title, callback)
-        return ui(parent, "Button", { Title = title, Callback = function()
+        return ui(parent, "Button", { Title = lelHubTitle(title), Callback = function()
             local success, message = pcall(callback)
 
             if not success then
@@ -156,13 +198,48 @@ local function installLelHubControls(library, window, configuration)
     end
 
     local function restoreAccessories()
-        for part, transparency in pairs(accessoryParts) do
-            if part.Parent then
-                part.LocalTransparencyModifier = transparency
+        if accessoryConnection then accessoryConnection:Disconnect() accessoryConnection = nil end
+        accessoryCharacter = nil
+        for object, properties in pairs(accessoryParts) do
+            if object.Parent then
+                for property, value in pairs(properties) do object[property] = value end
             end
         end
-
         accessoryParts = {}
+    end
+
+    local function hideAccessoryObject(object)
+        local accessory = object:FindFirstAncestorWhichIsA("Accoutrement") or object:FindFirstAncestorWhichIsA("Accessory")
+        if not accessory or not accessoryCharacter or not accessory:IsDescendantOf(accessoryCharacter) then return end
+        local properties
+        if object:IsA("BasePart") then
+            properties = { Transparency = 1, LocalTransparencyModifier = 1, CastShadow = false }
+        elseif object:IsA("Decal") or object:IsA("Texture") then
+            properties = { Transparency = 1 }
+        elseif object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam") or object:IsA("WrapLayer") then
+            properties = { Enabled = false }
+        end
+        if not properties then return end
+        local saved = accessoryParts[object]
+        if not saved then saved = {} accessoryParts[object] = saved end
+        for property, value in pairs(properties) do
+            if saved[property] == nil then saved[property] = object[property] end
+            object[property] = value
+        end
+    end
+
+    local function hideAccessories(character)
+        if not state.HideAccessories or not character then return end
+        if accessoryCharacter ~= character then
+            restoreAccessories()
+            accessoryCharacter = character
+            accessoryConnection = character.DescendantAdded:Connect(function(object)
+                if not state.HideAccessories or destroyed then return end
+                hideAccessoryObject(object)
+                for _, descendant in ipairs(object:GetDescendants()) do hideAccessoryObject(descendant) end
+            end)
+        end
+        for _, object in ipairs(character:GetDescendants()) do hideAccessoryObject(object) end
     end
 
     local function stopBasicFlight()
@@ -184,21 +261,36 @@ local function installLelHubControls(library, window, configuration)
     end
 
     local function restoreBasicMovement()
+        if configuration.ResetMovement then configuration.ResetMovement() end
+        local _, humanoid, root = parts()
+        local saved = humanoid and originals[humanoid]
+        local values = {
+            WalkSpeed = saved and saved.WalkSpeed or (humanoid == sprintHumanoid and sprintOriginal) or humanoid and humanoid.WalkSpeed or 16,
+            JumpPower = saved and saved.JumpPower or humanoid and humanoid.JumpPower or 50,
+            HipHeight = saved and saved.HipHeight or humanoid and humanoid.HipHeight or 2,
+        }
         basicValues = {}
-
-        for humanoid, saved in pairs(originals) do
-            if humanoid.Parent then
-                for property, value in pairs(saved) do
-                    humanoid[property] = value
-                end
+        for _, id in ipairs({ "Fly", "Noclip", "InfiniteJump", "Sprint", "AutoWalk", "NoSit", "Spin" }) do
+            if controls[id] then controls[id]:SetValue(false) end
+        end
+        basicFlags.Fly, basicFlags.Noclip, basicFlags.InfiniteJump = false, false, false
+        state.Sprint, state.AutoWalk, state.NoSit, state.Spin = false, false, false, false
+        releaseSprint()
+        releaseSpin()
+        stopBasicFlight()
+        restoreBasicCollisions()
+        if humanoid then humanoid:Move(Vector3.zero, false) end
+        if root then root.AssemblyLinearVelocity = Vector3.zero root.AssemblyAngularVelocity = Vector3.zero end
+        for target, properties in pairs(originals) do
+            if target.Parent then
+                for property, value in pairs(properties) do target[property] = value end
             end
         end
-
         originals = setmetatable({}, { __mode = "k" })
-
-        if originalCamera and originalCamera.Parent and originalFov then
-            originalCamera.FieldOfView = originalFov
-        end
+        local wasLoading = loading
+        loading = true
+        for id, value in pairs(values) do if controls[id] then controls[id]:SetValue(value) end end
+        loading = wasLoading
     end
 
     local utilityTab = configuration.PlayerTab or ui(window, "Tab", { Title = configuration.BasicMovement and "Player" or "Utilities", Icon = "user" })
@@ -228,31 +320,21 @@ local function installLelHubControls(library, window, configuration)
             basicFlags.InfiniteJump = value
         end)
         end
-        toggle(movement, "Fly", "Fly", function(value)
+        local flight = ui(utilityTab, "Section", "Flight")
+        toggle(flight, "Fly", "Flight", function(value)
             basicFlags.Fly = value
 
             if not value then
                 stopBasicFlight()
             end
         end)
-        slider(movement, "FlySpeed", "Fly speed", 100, 1, 500, function(value)
+        slider(flight, "FlySpeed", "Fly speed", 100, 1, 500, function(value)
             basicFlags.FlySpeed = value
         end)
-        slider(movement, "FOV", "Field of view", 70, 30, 120, function(value)
-            local camera = workspace.CurrentCamera
 
-            if camera then
-                if not originalCamera then
-                    originalCamera = camera
-                    originalFov = camera.FieldOfView
-                end
-
-                camera.FieldOfView = value
-            end
-        end)
-        button(movement, "Restore movement", restoreBasicMovement)
     end
 
+    movement = ui(utilityTab, "Section", "Movement Options")
     toggle(movement, "Sprint", "Hold Shift to sprint", function(value)
         state.Sprint = value
 
@@ -302,27 +384,29 @@ local function installLelHubControls(library, window, configuration)
             humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
         end
     end)
-    button(movement, "Stop movement", function()
-        local _, humanoid, root = parts()
+    button(movement, "Restore movement", restoreBasicMovement)
 
-        if humanoid then
-            humanoid:Move(Vector3.zero, false)
-        end
-
-        if root then
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-        end
-    end)
-
-    local cameraSection = ui(utilityTab, "Section", "Camera and character")
-    toggle(cameraSection, "HideAccessories", "Hide accessories locally", function(value)
+    local characterSection = ui(utilityTab, "Section", "Character")
+    toggle(characterSection, "HideAccessories", "Hide accessories locally", function(value)
         state.HideAccessories = value
 
-        if not value then
-            restoreAccessories()
-        end
+        if value then hideAccessories(player.Character) else restoreAccessories() end
     end)
+    local cameraSection = ui(utilityTab, "Section", "Camera")
+    if configuration.BasicMovement then
+        slider(cameraSection, "FOV", "Field of view", 70, 30, 120, function(value)
+            local camera = workspace.CurrentCamera
+
+            if camera then
+                if not originalCamera then
+                    originalCamera = camera
+                    originalFov = camera.FieldOfView
+                end
+
+                camera.FieldOfView = value
+            end
+        end)
+    end
     slider(cameraSection, "Zoom", "Camera zoom distance", math.clamp(originalZoom, 1, 2000), 1, 2000, function(value)
         player.CameraMaxZoomDistance = math.max(player.CameraMinZoomDistance, value)
     end)
@@ -347,10 +431,10 @@ local function installLelHubControls(library, window, configuration)
     end)
 
     local places = ui(utilityTab, "Section", "Saved positions")
-    register(places, "Input", "WaypointName", { Title = "Position name", Default = "Home", Finished = true }, function(value)
+    register(places, "Input", "WaypointName", { Title = lelHubTitle("Position name"), Default = "Home", Finished = true }, function(value)
         waypointName = tostring(value):sub(1, 40)
     end)
-    local waypointDropdown = register(places, "Dropdown", "Waypoint", { Title = "Saved position", Values = {}, Multi = false }, function(value)
+    local waypointDropdown = register(places, "Dropdown", "Waypoint", { Title = lelHubTitle("Saved position"), Values = {}, Multi = false }, function(value)
         selectedWaypoint = value
     end)
 
@@ -407,7 +491,7 @@ local function installLelHubControls(library, window, configuration)
             refreshWaypoints()
         end
     end)
-    register(places, "Input", "Coordinates", { Title = "Coordinates", Default = "", Placeholder = "X, Y, Z", Finished = true }, function(value)
+    register(places, "Input", "Coordinates", { Title = lelHubTitle("Coordinates"), Default = "", Placeholder = "X, Y, Z", Finished = true }, function(value)
         coordinateText = tostring(value)
     end)
     button(places, "Teleport to coordinates", function()
@@ -446,6 +530,11 @@ local function installLelHubControls(library, window, configuration)
     local savedCameraType
     local outlines = {}
     local outlinesEnabled = false
+    local esp = { Names = true, Health = true, Distance = false, TeamCheck = false, TeamColors = false, Range = 3000, Fill = 1 }
+    local function clearESP(target)
+        local entry = outlines[target]
+        if entry then entry.Highlight:Destroy() entry.Billboard:Destroy() outlines[target] = nil end
+    end
     local function restoreSpectate()
         if spectating then
             local camera = workspace.CurrentCamera
@@ -491,7 +580,7 @@ local function installLelHubControls(library, window, configuration)
             end)
             tool.Parent = backpack
         end)
-        local playersTab = ui(window, "Tab", { Title = "Players", Icon = "users" })
+        local playersTab = ui(window, "Tab", { Title = lelHubTitle("Players"), Icon = "users" })
         local names = { "Select a player" }
         local playerDropdown
         local function refreshPlayers(leaving)
@@ -503,7 +592,7 @@ local function installLelHubControls(library, window, configuration)
             if playerDropdown then playerDropdown:SetValues(names) end
         end
         refreshPlayers()
-        playerDropdown = register(playersTab, "Dropdown", "TargetPlayer", { Title = "Player", Values = names, Default = "Select a player", Multi = false }, function(value)
+        playerDropdown = register(playersTab, "Dropdown", "TargetPlayer", { Title = lelHubTitle("Player"), Values = names, Default = "Select a player", Multi = false }, function(value)
             selectedPlayer = value ~= "Select a player" and players:FindFirstChild(value) or nil
         end)
         button(playersTab, "Teleport near player", function()
@@ -520,13 +609,22 @@ local function installLelHubControls(library, window, configuration)
             camera.CameraType, camera.CameraSubject = Enum.CameraType.Custom, humanoid
         end)
         button(playersTab, "Stop spectating", restoreSpectate)
-        toggle(playersTab, "PlayerOutlines", "Player outlines", function(value) outlinesEnabled = value end)
+        local espSection = ui(playersTab, "Section", "ESP")
+        toggle(espSection, "PlayerOutlines", "Player ESP", function(value)
+            outlinesEnabled = value
+            if not value then for target in pairs(outlines) do clearESP(target) end end
+        end)
+        for _, item in ipairs({ { "Names", "Names", true }, { "Health", "Health", true }, { "Distance", "Distance", false }, { "TeamCheck", "Team Check", false }, { "TeamColors", "Team Colors", false } }) do
+            local property = item[1]
+            register(espSection, "Toggle", "ESP" .. property, { Title = item[2], Default = item[3] }, function(value) esp[property] = value end)
+        end
+        slider(espSection, "ESPRange", "Max Distance", 3000, 100, 10000, function(value) esp.Range = value end)
+        slider(espSection, "ESPFill", "Fill Transparency", 1, 0, 1, function(value) esp.Fill = value end, 2)
         connect(players.PlayerAdded, function() refreshPlayers() end)
         connect(players.PlayerRemoving, function(target)
             refreshPlayers(target)
             if selectedPlayer == target then restoreSpectate() selectedPlayer = nil end
-            local entry = outlines[target]
-            if entry then entry:Destroy() outlines[target] = nil end
+            clearESP(target)
         end)
         connect(player.Idled, function()
             if antiIdle then
@@ -552,30 +650,52 @@ local function installLelHubControls(library, window, configuration)
             local camera = workspace.CurrentCamera
             if humanoid and camera then camera.CameraSubject = humanoid end
         end
+        local _, _, myRoot = parts()
         for _, target in ipairs(players:GetPlayers()) do
             if target ~= player then
                 local character = target.Character
+                local root = character and character:FindFirstChild("HumanoidRootPart")
+                local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+                local distance = root and myRoot and (root.Position - myRoot.Position).Magnitude or math.huge
+                local teammate = not player.Neutral and not target.Neutral and player.Team ~= nil and player.Team == target.Team
+                local visible = outlinesEnabled and root and humanoid and humanoid.Health > 0 and distance <= esp.Range and not (esp.TeamCheck and teammate)
                 local entry = outlines[target]
-                if entry and (not outlinesEnabled or entry.Parent ~= character) then entry:Destroy() outlines[target] = nil entry = nil end
-                if outlinesEnabled and character and not entry then
-                    entry = Instance.new("Highlight")
-                    entry.Name, entry.Adornee, entry.Parent = "LelHubSharedOutline", character, character
-                    entry.FillTransparency = 1
-                    entry.OutlineColor = Color3.fromRGB(120, 160, 255)
-                    entry.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
-                    outlines[target] = entry
+                if entry and (not visible or entry.Character ~= character) then clearESP(target) entry = nil end
+                if visible then
+                    if not entry then
+                        local highlight = Instance.new("Highlight")
+                        highlight.Name, highlight.Adornee, highlight.Parent = "LelHubESP", character, character
+                        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                        local billboard = Instance.new("BillboardGui")
+                        billboard.Name, billboard.Adornee, billboard.Parent = "LelHubESPLabel", root, root
+                        billboard.Size, billboard.StudsOffset, billboard.AlwaysOnTop = UDim2.fromOffset(220, 60), Vector3.new(0, 3.5, 0), true
+                        local label = Instance.new("TextLabel")
+                        label.Size, label.BackgroundTransparency = UDim2.fromScale(1, 1), 1
+                        label.Font, label.TextSize, label.TextStrokeTransparency = Enum.Font.GothamMedium, 14, 0.4
+                        label.Parent = billboard
+                        entry = { Highlight = highlight, Billboard = billboard, Text = label, Character = character }
+                        outlines[target] = entry
+                    end
+                    local color = esp.TeamColors and target.TeamColor and target.TeamColor.Color or Color3.fromRGB(120, 160, 255)
+                    entry.Highlight.FillColor, entry.Highlight.OutlineColor = color, color
+                    entry.Highlight.FillTransparency, entry.Highlight.OutlineTransparency = esp.Fill, 0
+                    local lines = {}
+                    if esp.Names then table.insert(lines, target.DisplayName or target.Name) end
+                    if esp.Health then table.insert(lines, tostring(math.ceil(humanoid.Health)) .. " HP") end
+                    if esp.Distance then table.insert(lines, tostring(math.floor(distance)) .. " studs") end
+                    entry.Billboard.Enabled, entry.Text.TextColor3, entry.Text.Text = #lines > 0, color, table.concat(lines, "\n")
                 end
             end
         end
     end)
 
-    local settingsTab = configuration.SettingsTab or ui(window, "Tab", { Title = "Settings", Icon = "settings" })
+    local settingsTab = configuration.SettingsTab or ui(window, "Tab", { Title = lelHubTitle("Settings"), Icon = "settings" })
     local appearance = ui(settingsTab, "Section", "Appearance")
-    register(appearance, "Dropdown", "Theme", { Title = "Theme", Values = library.Themes or { "Dark", "Light" }, Default = library.Theme or "Dark", Multi = false }, function(value)
+    register(appearance, "Dropdown", "Theme", { Title = lelHubTitle("Theme"), Values = library.Themes or { "Dark", "Light" }, Default = library.Theme or "Dark", Multi = false }, function(value)
         library:SetTheme(value)
     end)
     local menuBind = ui(appearance, "Keybind", "LelShared_MenuKey", {
-        Title = "Menu key",
+        Title = lelHubTitle("Menu key"),
         Default = "RightShift",
         Mode = "Toggle",
         ChangedCallback = function(value)
@@ -632,7 +752,7 @@ local function installLelHubControls(library, window, configuration)
     connect(launcher.Activated, function()
         window:Minimize()
     end)
-    local showButton = register(appearance, "Toggle", "ShowButton", { Title = "Show menu button", Default = true }, function(value)
+    local showButton = register(appearance, "Toggle", "ShowButton", { Title = lelHubTitle("Show menu button"), Default = true }, function(value)
         launcher.Visible = value
     end)
     slider(appearance, "ButtonSize", "Menu button size", 52, 40, 72, function(value)
@@ -707,8 +827,8 @@ local function installLelHubControls(library, window, configuration)
             moduleFiles[entry.Name] = entry.File
         end
     end
-    local moduleChoice = moduleNames[1]
-    register(moduleSection, "Dropdown", "HubChoice", { Title = "Choose hub", Values = moduleNames, Default = moduleChoice, Multi = false }, function(value)
+    local moduleChoice = moduleFiles.Global and "Global" or moduleNames[1]
+    register(moduleSection, "Dropdown", "HubChoice", { Title = lelHubTitle("Choose hub"), Values = moduleNames, Default = moduleChoice, Multi = false }, function(value)
         moduleChoice = value
     end)
     button(moduleSection, "Open selected hub", function()
@@ -755,7 +875,7 @@ local function installLelHubControls(library, window, configuration)
         releaseSpin()
         restoreSpectate()
         restoreLight()
-        for target, highlight in pairs(outlines) do highlight:Destroy() outlines[target] = nil end
+        for target in pairs(outlines) do clearESP(target) end
         local character = player.Character
         local backpack = player:FindFirstChildOfClass("Backpack")
         local teleportTool = (character and character:FindFirstChild("LelHub Teleport")) or (backpack and backpack:FindFirstChild("LelHub Teleport"))
@@ -807,6 +927,9 @@ local function installLelHubControls(library, window, configuration)
         stopBasicFlight()
         restoreBasicCollisions()
         restoreAccessories()
+    end)
+    connect(player.CharacterAdded, function(character)
+        hideAccessories(character)
     end)
     local accessoryElapsed = 0
     connect(runService.PreSimulation, function(deltaTime)
@@ -928,23 +1051,9 @@ local function installLelHubControls(library, window, configuration)
         end
 
         accessoryElapsed = accessoryElapsed + deltaTime
-
         if state.HideAccessories and accessoryElapsed >= 0.25 then
             accessoryElapsed = 0
-
-            for _, accessory in ipairs(character:GetChildren()) do
-                if accessory:IsA("Accessory") then
-                    for _, part in ipairs(accessory:GetDescendants()) do
-                        if part:IsA("BasePart") then
-                            if accessoryParts[part] == nil then
-                                accessoryParts[part] = part.LocalTransparencyModifier
-                            end
-
-                            part.LocalTransparencyModifier = 1
-                        end
-                    end
-                end
-            end
+            hideAccessories(character)
         end
     end)
 
@@ -962,7 +1071,7 @@ local function createLelHub(name)
     local previous = environment.LelHubModules[name]
     if previous then previous.Cleanup() end
     local library = loadstring(game:HttpGetAsync("https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau"))()
-    local window = library:CreateWindow({ Title = "LelHub Murder Mystery 2", SubTitle = "by LelSploit", Size = UDim2.fromOffset(680, 470), MinSize = Vector2.new(480, 360), TabWidth = 155, Resize = true, Acrylic = false, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightShift })
+    local window = library:CreateWindow({ Title = lelHubTitle("LelHub Murder Mystery 2"), SubTitle = "by LelSploit", Size = UDim2.fromOffset(760, 540), MinSize = Vector2.new(480, 360), TabWidth = 155, Resize = true, Acrylic = false, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightShift })
     local hub = { Library = library, Window = window, Connections = {}, Resources = {}, Tabs = {}, Controls = {}, Stopped = false }
     local serial = 0
     function hub:Connect(signal, callback)
@@ -975,7 +1084,7 @@ local function createLelHub(name)
         return resource
     end
     function hub:Notify(message)
-        if not self.Stopped then library:Notify({ Title = "LelHub", Content = tostring(message), Duration = 4 }) end
+        if not self.Stopped then library:Notify({ Title = lelHubTitle("LelHub"), Content = tostring(message), Duration = 4 }) end
     end
     function hub:Tab(title, icon)
         local tab = window:CreateTab({ Title = lelHubTitle(title), Icon = icon or "grid" })
@@ -1045,6 +1154,8 @@ local state = { Murderer = false, Sheriff = false, Innocent = false, Self = fals
 local colors = { Murderer = Color3.fromRGB(255, 90, 110), Sheriff = Color3.fromRGB(100, 160, 255), Innocent = Color3.fromRGB(100, 235, 160) }
 local highlights = {}
 local elapsed = 0
+local gunESP = false
+local gunHighlight
 
 local function roleOf(target)
     local knife, gun = false, false
@@ -1111,25 +1222,50 @@ local function refresh()
     end
 end
 
-local tab = hub:Tab("Role highlights", "eye")
-local targets = tab:CreateSection("Player roles")
+local tab = hub:Tab("ESP", "eye")
+local targets = tab:CreateSection("Roles")
 for _, item in ipairs({ { "Murderer", "Highlight murderer" }, { "Sheriff", "Highlight sheriff / gun holder" }, { "Innocent", "Highlight innocents" } }) do
     local role = item[1]
     hub:Toggle(targets, "Role" .. role, item[2], function(value) state[role] = value refresh() end)
 end
-local display = tab:CreateSection("Display options")
+local display = tab:CreateSection("Display")
 for _, item in ipairs({ { "Names", "Show player names", true }, { "RoleLabels", "Show role labels", true }, { "Distance", "Show distance", false }, { "Self", "Include your character", false } }) do
     local property = item[1]
     hub:Toggle(display, "Role" .. property, item[2], function(value) state[property] = value refresh() end, item[3])
 end
 hub:Slider(display, "RoleTransparency", "Highlight transparency", 0.65, 0, 1, function(value) state.Transparency = value refresh() end, 2)
 hub:Button(display, "Refresh highlights", refresh)
+local items = tab:CreateSection("Items")
+hub:Toggle(items, "GunESP", "Gun ESP", function(value)
+    gunESP = value
+    if not value and gunHighlight then gunHighlight:Destroy() gunHighlight = nil end
+end)
+hub:Button(items, "Teleport to Gun", function()
+    local gun = workspace:FindFirstChild("GunDrop", true)
+    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if not gun or not root then return hub:Notify("No dropped gun found.") end
+    if gun:IsA("BasePart") or gun:IsA("Model") then
+        local location = gun:IsA("BasePart") and gun.CFrame or gun:GetPivot()
+        root.CFrame = location + Vector3.new(0, 3, 0)
+    end
+end)
 hub:Connect(players.PlayerRemoving, clear)
 hub:Connect(game:GetService("RunService").Heartbeat, function(deltaTime)
     elapsed = elapsed + deltaTime
-    if elapsed >= 0.2 then elapsed = 0 refresh() end
+    if elapsed >= 0.2 then
+        elapsed = 0
+        refresh()
+        local gun = gunESP and workspace:FindFirstChild("GunDrop", true)
+        if gunHighlight and (not gun or gunHighlight.Adornee ~= gun) then gunHighlight:Destroy() gunHighlight = nil end
+        if gun and (gun:IsA("BasePart") or gun:IsA("Model")) and not gunHighlight then
+            gunHighlight = Instance.new("Highlight")
+            gunHighlight.Name, gunHighlight.Adornee, gunHighlight.Parent = "LelHubGunESP", gun, gun
+            gunHighlight.DepthMode, gunHighlight.FillTransparency = Enum.HighlightDepthMode.AlwaysOnTop, 0.65
+            gunHighlight.FillColor, gunHighlight.OutlineColor = colors.Sheriff, colors.Sheriff
+        end
+    end
 end)
-hub:Add(function() for target in pairs(highlights) do clear(target) end end)
+hub:Add(function() for target in pairs(highlights) do clear(target) end if gunHighlight then gunHighlight:Destroy() end end)
 hub.GetRole = roleOf
 hub.Highlights = highlights
 return hub:Finish()
