@@ -1,323 +1,831 @@
-local FLY_SPEED      = 60
-local DRIVE_SPEED    = 250
-local WHEELIE_ANGLE  = 30
-local FLY_MIN,   FLY_MAX   = 10, 400
-local DRIVE_MIN, DRIVE_MAX = 50, 1400
-local DRIVE_HOVER    = 2.5
+local function installLelHubControls(library, window, configuration)
+    local players = game:GetService("Players")
+    local player = players.LocalPlayer
+    local input = game:GetService("UserInputService")
+    local runService = game:GetService("RunService")
+    local tweenService = game:GetService("TweenService")
+    local http = game:GetService("HttpService")
+    local connections = {}
+    local controls = {}
+    local state = { Sprint = false, SprintSpeed = 32, AutoWalk = false, NoSit = false, Spin = false, SpinSpeed = 90, HideAccessories = false }
+    local originals = setmetatable({}, { __mode = "k" })
+    local accessoryParts = {}
+    local sprintHumanoid
+    local sprintOriginal
+    local spinHumanoid
+    local spinOriginal
+    local spinner
+    local basicFlight = {}
+    local basicCollisions = {}
+    local waypoints = {}
+    local selectedWaypoint
+    local waypointName = "Home"
+    local coordinateText = ""
+    local destroyed = false
+    local loading = false
+    local originalZoom = player.CameraMaxZoomDistance
+    local originalFov
+    local originalCamera
+    local basicValues = {}
+    local basicFlags = { Noclip = false, InfiniteJump = false, Fly = false, FlySpeed = 100 }
 
-local Players          = game:GetService("Players")
-local RunService       = game:GetService("RunService")
+    local function connect(signal, callback)
+        local connection = signal:Connect(callback)
+        table.insert(connections, connection)
+        return connection
+    end
+
+    local function notify(message)
+        if not destroyed then
+            library:Notify({ Title = "LelHub", Content = message, Duration = 3 })
+        end
+    end
+
+    local function ui(parent, kind, ...)
+        local method = parent["Create" .. kind] or parent["Add" .. kind] or parent[kind]
+        return method(parent, ...)
+    end
+
+    local function parts()
+        local character = player.Character
+        return character, character and character:FindFirstChildOfClass("Humanoid"), character and character:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function remember(humanoid, property)
+        originals[humanoid] = originals[humanoid] or {}
+
+        if originals[humanoid][property] == nil then
+            originals[humanoid][property] = humanoid[property]
+        end
+    end
+
+    local function register(parent, kind, id, options, callback)
+        local control = ui(parent, kind, "LelShared_" .. id, options)
+        controls[id] = control
+        control:OnChanged(function(value)
+            if not loading and not destroyed then
+                callback(value)
+            end
+        end)
+        return control
+    end
+
+    local function toggle(parent, id, title, callback)
+        return register(parent, "Toggle", id, { Title = title, Default = false }, callback)
+    end
+
+    local function slider(parent, id, title, default, minimum, maximum, callback, rounding)
+        return register(parent, "Slider", id, { Title = title, Default = default, Min = minimum, Max = maximum, Rounding = rounding or 0 }, function(value)
+            local number = tonumber(value)
+
+            if number and number == number and math.abs(number) ~= math.huge then
+                callback(math.clamp(number, minimum, maximum))
+            end
+        end)
+    end
+
+    local function button(parent, title, callback)
+        return ui(parent, "Button", { Title = title, Callback = function()
+            local success, message = pcall(callback)
+
+            if not success then
+                notify("Could not complete that action.")
+            elseif type(message) == "string" then
+                notify(message)
+            end
+        end })
+    end
+
+    local function releaseSprint()
+        if sprintHumanoid and sprintHumanoid.Parent then
+            sprintHumanoid.WalkSpeed = sprintOriginal
+        end
+
+        sprintHumanoid = nil
+        sprintOriginal = nil
+    end
+
+    local function releaseSpin()
+        if spinner then
+            spinner:Destroy()
+            spinner = nil
+        end
+
+        if spinHumanoid and spinHumanoid.Parent then
+            spinHumanoid.AutoRotate = spinOriginal
+        end
+
+        spinHumanoid = nil
+        spinOriginal = nil
+    end
+
+    local function restoreAccessories()
+        for part, transparency in pairs(accessoryParts) do
+            if part.Parent then
+                part.LocalTransparencyModifier = transparency
+            end
+        end
+
+        accessoryParts = {}
+    end
+
+    local function stopBasicFlight()
+        for _, object in pairs(basicFlight) do
+            object:Destroy()
+        end
+
+        basicFlight = {}
+    end
+
+    local function restoreBasicCollisions()
+        for part, value in pairs(basicCollisions) do
+            if part.Parent then
+                part.CanCollide = value
+            end
+        end
+
+        basicCollisions = {}
+    end
+
+    local function restoreBasicMovement()
+        basicValues = {}
+
+        for humanoid, saved in pairs(originals) do
+            if humanoid.Parent then
+                for property, value in pairs(saved) do
+                    humanoid[property] = value
+                end
+            end
+        end
+
+        originals = setmetatable({}, { __mode = "k" })
+
+        if originalCamera and originalCamera.Parent and originalFov then
+            originalCamera.FieldOfView = originalFov
+        end
+    end
+
+    local utilityTab = ui(window, "Tab", { Title = "Utilities", Icon = "sparkles" })
+    local movement = ui(utilityTab, "Section", "Movement")
+
+    if configuration.BasicMovement then
+        for _, entry in ipairs({ { "WalkSpeed", "Walk speed", 16, 16, 500 }, { "JumpPower", "Jump power", 50, 0, 500 }, { "HipHeight", "Hip height", 2, 0, 50 } }) do
+            local property = entry[1]
+            slider(movement, property, entry[2], entry[3], entry[4], entry[5], function(value)
+                basicValues[property] = value
+            end)
+        end
+
+        toggle(movement, "Noclip", "Noclip", function(value)
+            basicFlags.Noclip = value
+
+            if not value then
+                restoreBasicCollisions()
+            end
+        end)
+        toggle(movement, "InfiniteJump", "Infinite jump", function(value)
+            basicFlags.InfiniteJump = value
+        end)
+        toggle(movement, "Fly", "Fly", function(value)
+            basicFlags.Fly = value
+
+            if not value then
+                stopBasicFlight()
+            end
+        end)
+        slider(movement, "FlySpeed", "Fly speed", 100, 1, 500, function(value)
+            basicFlags.FlySpeed = value
+        end)
+        slider(movement, "FOV", "Field of view", 70, 30, 120, function(value)
+            local camera = workspace.CurrentCamera
+
+            if camera then
+                if not originalCamera then
+                    originalCamera = camera
+                    originalFov = camera.FieldOfView
+                end
+
+                camera.FieldOfView = value
+            end
+        end)
+        button(movement, "Restore movement", restoreBasicMovement)
+    end
+
+    toggle(movement, "Sprint", "Hold Shift to sprint", function(value)
+        state.Sprint = value
+
+        if not value then
+            releaseSprint()
+        end
+    end)
+    slider(movement, "SprintSpeed", "Sprint speed", 32, 16, 500, function(value)
+        state.SprintSpeed = value
+    end)
+    toggle(movement, "AutoWalk", "Auto walk", function(value)
+        state.AutoWalk = value
+
+        if not value then
+            local _, humanoid = parts()
+
+            if humanoid then
+                humanoid:Move(Vector3.zero, false)
+            end
+        end
+    end)
+    toggle(movement, "NoSit", "Prevent sitting", function(value)
+        state.NoSit = value
+    end)
+    toggle(movement, "Spin", "Spin", function(value)
+        state.Spin = value
+
+        if not value then
+            releaseSpin()
+        end
+    end)
+    slider(movement, "SpinSpeed", "Spin speed", 90, 0, 720, function(value)
+        state.SpinSpeed = value
+    end)
+    button(movement, "Sit", function()
+        local _, humanoid = parts()
+
+        if humanoid then
+            humanoid.Sit = true
+        end
+    end)
+    button(movement, "Stand up", function()
+        local _, humanoid = parts()
+
+        if humanoid then
+            humanoid.Sit = false
+            humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+        end
+    end)
+    button(movement, "Stop movement", function()
+        local _, humanoid, root = parts()
+
+        if humanoid then
+            humanoid:Move(Vector3.zero, false)
+        end
+
+        if root then
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+        end
+    end)
+
+    local cameraSection = ui(utilityTab, "Section", "Camera and character")
+    toggle(cameraSection, "HideAccessories", "Hide accessories locally", function(value)
+        state.HideAccessories = value
+
+        if not value then
+            restoreAccessories()
+        end
+    end)
+    slider(cameraSection, "Zoom", "Camera zoom distance", math.clamp(originalZoom, 1, 2000), 1, 2000, function(value)
+        player.CameraMaxZoomDistance = math.max(player.CameraMinZoomDistance, value)
+    end)
+    button(cameraSection, "Restore camera zoom", function()
+        player.CameraMaxZoomDistance = math.max(player.CameraMinZoomDistance, originalZoom)
+    end)
+    button(cameraSection, "Return camera to character", function()
+        if configuration.StopCamera then
+            configuration.StopCamera()
+        end
+
+        local camera = workspace.CurrentCamera
+        local _, humanoid = parts()
+
+        if camera and humanoid then
+            camera.CameraType = Enum.CameraType.Custom
+            camera.CameraSubject = humanoid
+        end
+
+        input.MouseBehavior = Enum.MouseBehavior.Default
+        input.MouseIconEnabled = true
+    end)
+
+    local places = ui(utilityTab, "Section", "Saved positions")
+    register(places, "Input", "WaypointName", { Title = "Position name", Default = "Home", Finished = true }, function(value)
+        waypointName = tostring(value):sub(1, 40)
+    end)
+    local waypointDropdown = register(places, "Dropdown", "Waypoint", { Title = "Saved position", Values = {}, Multi = false }, function(value)
+        selectedWaypoint = value
+    end)
+
+    local function refreshWaypoints()
+        local names = {}
+
+        for name in pairs(waypoints) do
+            table.insert(names, name)
+        end
+
+        table.sort(names)
+        waypointDropdown:SetValues(names)
+        waypointDropdown:SetValue(selectedWaypoint)
+    end
+
+    local function teleport(frame)
+        local _, humanoid, root = parts()
+
+        if not root then
+            return "Character is not ready."
+        end
+
+        if humanoid.SeatPart then
+            return "Leave your vehicle first."
+        end
+
+        root.CFrame = frame
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+    end
+
+    button(places, "Save current position", function()
+        local _, _, root = parts()
+
+        if root and waypointName:match("%S") then
+            waypoints[waypointName] = root.CFrame
+            selectedWaypoint = waypointName
+            refreshWaypoints()
+        end
+    end)
+    button(places, "Go to saved position", function()
+        local frame = selectedWaypoint and waypoints[selectedWaypoint]
+
+        if not frame then
+            return "Select a saved position."
+        end
+
+        return teleport(frame)
+    end)
+    button(places, "Delete saved position", function()
+        if selectedWaypoint then
+            waypoints[selectedWaypoint] = nil
+            selectedWaypoint = nil
+            refreshWaypoints()
+        end
+    end)
+    register(places, "Input", "Coordinates", { Title = "Coordinates", Default = "", Placeholder = "X, Y, Z", Finished = true }, function(value)
+        coordinateText = tostring(value)
+    end)
+    button(places, "Teleport to coordinates", function()
+        local values = {}
+
+        for token in coordinateText:gmatch("[^,%s]+") do
+            local number = tonumber(token)
+
+            if not number or number ~= number or math.abs(number) == math.huge then
+                return "Enter three valid coordinates."
+            end
+
+            table.insert(values, number)
+        end
+
+        if #values ~= 3 then
+            return "Enter X, Y and Z."
+        end
+
+        return teleport(CFrame.new(values[1], values[2], values[3]))
+    end)
+    button(places, "Copy coordinates", function()
+        local _, _, root = parts()
+
+        if root and type(setclipboard) == "function" then
+            setclipboard(string.format("%.2f, %.2f, %.2f", root.Position.X, root.Position.Y, root.Position.Z))
+        end
+    end)
+
+    local settingsTab = configuration.SettingsTab or ui(window, "Tab", { Title = "Settings", Icon = "settings" })
+    local appearance = ui(settingsTab, "Section", "Appearance")
+    register(appearance, "Dropdown", "Theme", { Title = "Theme", Values = library.Themes or { "Dark", "Light" }, Default = library.Theme or "Dark", Multi = false }, function(value)
+        library:SetTheme(value)
+    end)
+    local menuBind = ui(appearance, "Keybind", "LelShared_MenuKey", {
+        Title = "Menu key",
+        Default = "RightShift",
+        Mode = "Toggle",
+        ChangedCallback = function(value)
+            local name = typeof(value) == "EnumItem" and value.Name or tostring(value):match("([^%.]+)$")
+            local success, key = pcall(function()
+                return Enum.KeyCode[name]
+            end)
+
+            if success and key and name ~= "Unknown" then
+                library.MinimizeKey = key
+            end
+        end,
+    })
+    library.MinimizeKey = Enum.KeyCode.RightShift
+    library.MinimizeKeybind = menuBind
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "LelHubLauncher_" .. configuration.Name
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 10002
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    gui.Parent = player:WaitForChild("PlayerGui")
+    local launcher = Instance.new("ImageButton")
+    launcher.Name = "MenuButton"
+    launcher.AnchorPoint = Vector2.new(1, 1)
+    launcher.Position = UDim2.new(1, -18, 1, -18)
+    launcher.Size = UDim2.fromOffset(52, 52)
+    launcher.BackgroundColor3 = Color3.fromRGB(24, 27, 39)
+    launcher.BackgroundTransparency = 0.08
+    launcher.BorderSizePixel = 0
+    launcher.Image = "rbxassetid://123368435411946"
+    launcher.ScaleType = Enum.ScaleType.Fit
+    launcher.AutoButtonColor = false
+    launcher.Parent = gui
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 14)
+    corner.Parent = launcher
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = Color3.fromRGB(112, 153, 255)
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0.25
+    stroke.Parent = launcher
+    local launcherSize = 52
+    local function hover(entered)
+        tweenService:Create(launcher, TweenInfo.new(0.16), { Size = UDim2.fromOffset(launcherSize + (entered and 4 or 0), launcherSize + (entered and 4 or 0)) }):Play()
+        tweenService:Create(stroke, TweenInfo.new(0.16), { Transparency = entered and 0 or 0.25 }):Play()
+    end
+    connect(launcher.MouseEnter, function()
+        hover(true)
+    end)
+    connect(launcher.MouseLeave, function()
+        hover(false)
+    end)
+    connect(launcher.Activated, function()
+        window:Minimize()
+    end)
+    local showButton = register(appearance, "Toggle", "ShowButton", { Title = "Show menu button", Default = true }, function(value)
+        launcher.Visible = value
+    end)
+    slider(appearance, "ButtonSize", "Menu button size", 52, 40, 72, function(value)
+        launcherSize = value
+        launcher.Size = UDim2.fromOffset(value, value)
+    end)
+    slider(appearance, "ButtonOpacity", "Menu button opacity", 0.92, 0.2, 1, function(value)
+        launcher.BackgroundTransparency = 1 - value
+    end, 2)
+    button(appearance, "Restore menu button", function()
+        launcher.Position = UDim2.new(1, -18, 1, -18)
+        controls.ButtonSize:SetValue(52)
+        controls.ButtonOpacity:SetValue(0.92)
+        showButton:SetValue(true)
+    end)
+
+    local profiles = ui(settingsTab, "Section", "Profile")
+    local profilePath = "LelHub/" .. configuration.Name .. "-profile.json"
+    button(profiles, "Save settings", function()
+        if not writefile or not isfolder or not makefolder then
+            return "Settings files are unavailable."
+        end
+
+        if not isfolder("LelHub") then
+            makefolder("LelHub")
+        end
+
+        local values = {}
+
+        for id, control in pairs(library.Options or {}) do
+            local value = control.Value
+
+            if type(value) == "number" or type(value) == "boolean" or type(value) == "string" then
+                values[id] = value
+            end
+        end
+
+        writefile(profilePath, http:JSONEncode(values))
+        return "Settings saved."
+    end)
+    button(profiles, "Load settings", function()
+        if not readfile or not isfile or not isfile(profilePath) then
+            return "No saved settings found."
+        end
+
+        local values = http:JSONDecode(readfile(profilePath))
+
+        for id, value in pairs(values) do
+            local control = library.Options and library.Options[id]
+
+            if control and type(control.Value) == type(value) then
+                pcall(function()
+                    control:SetValue(value, control.Mode)
+                end)
+            end
+        end
+
+        return "Settings loaded."
+    end)
+
+    local function cleanup()
+        if destroyed then
+            return
+        end
+
+        destroyed = true
+
+        if configuration.ShutdownLegacy then
+            for id, control in pairs(library.Options or {}) do
+                if not tostring(id):match("^LelShared_") and control.Type == "Toggle" and control.Value == true then
+                    pcall(function()
+                        control:SetValue(false)
+                    end)
+                end
+            end
+        end
+
+        for _, connection in ipairs(connections) do
+            connection:Disconnect()
+        end
+
+        releaseSprint()
+        releaseSpin()
+        if state.AutoWalk then
+            local _, humanoid = parts()
+
+            if humanoid then
+                humanoid:Move(Vector3.zero, false)
+            end
+        end
+
+        restoreAccessories()
+        stopBasicFlight()
+        restoreBasicCollisions()
+        restoreBasicMovement()
+        player.CameraMaxZoomDistance = math.max(player.CameraMinZoomDistance, originalZoom)
+        gui:Destroy()
+    end
+
+    button(settingsTab, "Unload LelHub", function()
+        for _, control in pairs(library.Options or {}) do
+            if control.Type == "Toggle" and control.Value == true then
+                pcall(function()
+                    control:SetValue(false)
+                end)
+            end
+        end
+
+        cleanup()
+
+        if configuration.Cleanup then
+            configuration.Cleanup()
+        elseif not library.Unloaded then
+            library:Destroy()
+        end
+    end)
+
+    connect(input.JumpRequest, function()
+        local _, humanoid = parts()
+
+        if basicFlags.InfiniteJump and humanoid and not input:GetFocusedTextBox() then
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
+    end)
+    connect(player.CharacterRemoving, function()
+        releaseSprint()
+        releaseSpin()
+        stopBasicFlight()
+        restoreBasicCollisions()
+        restoreAccessories()
+    end)
+    local accessoryElapsed = 0
+    connect(runService.PreSimulation, function(deltaTime)
+        if library.Unloaded then
+            cleanup()
+            return
+        end
+
+        local character, humanoid, root = parts()
+
+        if not humanoid or humanoid.Health <= 0 or not root then
+            releaseSprint()
+            releaseSpin()
+            stopBasicFlight()
+            return
+        end
+
+        for property, value in pairs(basicValues) do
+            remember(humanoid, property)
+
+            if property == "JumpPower" then
+                remember(humanoid, "UseJumpPower")
+                humanoid.UseJumpPower = true
+            end
+
+            humanoid[property] = value
+        end
+
+        local focused = input:GetFocusedTextBox()
+        local sprinting = state.Sprint and not focused and input:IsKeyDown(Enum.KeyCode.LeftShift) and not humanoid.SeatPart and not humanoid.PlatformStand
+
+        if sprinting then
+            if sprintHumanoid ~= humanoid then
+                releaseSprint()
+                sprintHumanoid = humanoid
+                sprintOriginal = humanoid.WalkSpeed
+            end
+
+            humanoid.WalkSpeed = state.SprintSpeed
+        elseif sprintHumanoid then
+            releaseSprint()
+        end
+
+        if state.NoSit then
+            humanoid.Sit = false
+        end
+
+        local camera = workspace.CurrentCamera
+
+        if state.AutoWalk and camera and not focused and not humanoid.SeatPart then
+            local look = camera.CFrame.LookVector
+            local direction = Vector3.new(look.X, 0, look.Z)
+            humanoid:Move(direction.Magnitude > 0.01 and direction.Unit or Vector3.zero, false)
+        end
+
+        if state.Spin and not humanoid.SeatPart then
+            if spinHumanoid ~= humanoid then
+                releaseSpin()
+                spinHumanoid = humanoid
+                spinOriginal = humanoid.AutoRotate
+            end
+
+            if not spinner or spinner.Parent ~= root then
+                releaseSpin()
+                spinHumanoid = humanoid
+                spinOriginal = humanoid.AutoRotate
+                spinner = Instance.new("BodyAngularVelocity")
+                spinner.Name = "LelHubSpin"
+                spinner.MaxTorque = Vector3.new(0, 9e9, 0)
+                spinner.Parent = root
+            end
+
+            humanoid.AutoRotate = false
+            spinner.AngularVelocity = Vector3.new(0, math.rad(state.SpinSpeed), 0)
+        elseif spinner then
+            releaseSpin()
+        end
+
+        if basicFlags.Noclip then
+            for _, part in ipairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    if basicCollisions[part] == nil then
+                        basicCollisions[part] = part.CanCollide
+                    end
+
+                    part.CanCollide = false
+                end
+            end
+        end
+
+        if basicFlags.Fly and camera and not humanoid.SeatPart then
+            if not basicFlight.Velocity or basicFlight.Velocity.Parent ~= root then
+                stopBasicFlight()
+                local velocity = Instance.new("BodyVelocity")
+                velocity.Name = "LelHubPlayerFlight"
+                velocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+                velocity.Parent = root
+                basicFlight.Velocity = velocity
+            end
+
+            local direction = Vector3.zero
+
+            if not focused then
+                if input:IsKeyDown(Enum.KeyCode.W) then direction = direction + camera.CFrame.LookVector end
+                if input:IsKeyDown(Enum.KeyCode.S) then direction = direction - camera.CFrame.LookVector end
+                if input:IsKeyDown(Enum.KeyCode.D) then direction = direction + camera.CFrame.RightVector end
+                if input:IsKeyDown(Enum.KeyCode.A) then direction = direction - camera.CFrame.RightVector end
+                if input:IsKeyDown(Enum.KeyCode.E) or input:IsKeyDown(Enum.KeyCode.Space) then direction = direction + Vector3.yAxis end
+                if input:IsKeyDown(Enum.KeyCode.Q) or input:IsKeyDown(Enum.KeyCode.LeftControl) then direction = direction - Vector3.yAxis end
+
+                if input.TouchEnabled and direction.Magnitude == 0 then
+                    direction = humanoid.MoveDirection
+                end
+            end
+
+            basicFlight.Velocity.Velocity = (direction.Magnitude > 1 and direction.Unit or direction) * basicFlags.FlySpeed
+        elseif next(basicFlight) then
+            stopBasicFlight()
+        end
+
+        accessoryElapsed = accessoryElapsed + deltaTime
+
+        if state.HideAccessories and accessoryElapsed >= 0.25 then
+            accessoryElapsed = 0
+
+            for _, accessory in ipairs(character:GetChildren()) do
+                if accessory:IsA("Accessory") then
+                    for _, part in ipairs(accessory:GetDescendants()) do
+                        if part:IsA("BasePart") then
+                            if accessoryParts[part] == nil then
+                                accessoryParts[part] = part.LocalTransparencyModifier
+                            end
+
+                            part.LocalTransparencyModifier = 1
+                        end
+                    end
+                end
+            end
+        end
+    end)
+
+    if library.OnUnload then
+        connect(library.OnUnload, cleanup)
+    end
+
+    return { Cleanup = cleanup, Controls = controls, Launcher = launcher, Settings = settingsTab, State = state }
+end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local Workspace        = game:GetService("Workspace")
-
+local Workspace = game:GetService("Workspace")
 local LocalPlayer = Players.LocalPlayer
-local Camera      = Workspace.CurrentCamera
+local environment = type(getgenv) == "function" and getgenv() or _G
 
-local mode        = "off"
-local wheelieOn   = false
-local aimOn       = false
+if environment.LelHubWheelieCleanup then
+    pcall(environment.LelHubWheelieCleanup)
+end
 
-local currentVehicle, vehicleRoot = nil, nil
-local bodyVelocity, bodyGyro      = nil, nil
-local alignAttach, alignOrient    = nil, nil
-
+local Library = loadstring(game:HttpGetAsync("https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau"))()
+local Window = Library:CreateWindow({
+    Title = "LelHub Wheelie",
+    SubTitle = "",
+    TabWidth = 150,
+    Size = UDim2.fromOffset(670, 460),
+    MinSize = Vector2.new(480, 360),
+    Resize = true,
+    Acrylic = false,
+    Theme = "Dark",
+    MinimizeKey = Enum.KeyCode.RightShift,
+})
+local vehicleTab = Window:CreateTab({ Title = "Vehicle", Icon = "bike" })
+local FLY_SPEED = 60
+local DRIVE_SPEED = 250
+local WHEELIE_ANGLE = 30
+local DRIVE_HOVER = 2.5
+local mode = "off"
+local wheelieOn = false
+local aimOn = false
+local currentVehicle, vehicleRoot
+local bodyVelocity, bodyGyro
+local alignAttach, alignOrient
 local connections = {}
-local function track(c) table.insert(connections, c); return c end
+local syncing = true
+local setMode
 
-local C = {
-    bg     = Color3.fromRGB(22, 22, 28),
-    top    = Color3.fromRGB(30, 30, 40),
-    stroke = Color3.fromRGB(56, 56, 70),
-    text   = Color3.fromRGB(234, 234, 244),
-    muted  = Color3.fromRGB(132, 132, 150),
-    accent = Color3.fromRGB(108, 152, 255),
-    btn    = Color3.fromRGB(40, 40, 50),
-    btnH   = Color3.fromRGB(54, 54, 68),
-    on     = Color3.fromRGB(96, 190, 140),
-    aimOn  = Color3.fromRGB(160, 110, 240),
-    wheelOn= Color3.fromRGB(230, 110, 110),
-}
+local function track(connection)
+    table.insert(connections, connection)
+    return connection
+end
 
-local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-local existing  = playerGui:FindFirstChild("LunarVehicle")
-if existing then existing:Destroy() end
+local function pressed(key)
+    return not UserInputService:GetFocusedTextBox() and UserInputService:IsKeyDown(key)
+end
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Name = "LunarVehicle"
-screenGui.ResetOnSpawn = false
-screenGui.IgnoreGuiInset = true
-screenGui.Parent = playerGui
-
-local function createSlider(parent, y, labelText, minV, maxV, initialV, accentColor, onChange)
-    local holder = Instance.new("Frame")
-    holder.Size = UDim2.new(1, -24, 0, 42)
-    holder.Position = UDim2.new(0, 12, 0, y)
-    holder.BackgroundTransparency = 1
-    holder.Parent = parent
-
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(0.7, 0, 0, 16)
-    label.BackgroundTransparency = 1
-    label.Text = labelText
-    label.TextColor3 = C.text
-    label.Font = Enum.Font.GothamMedium
-    label.TextSize = 12
-    label.TextXAlignment = Enum.TextXAlignment.Left
-    label.Parent = holder
-
-    local valueLabel = Instance.new("TextLabel")
-    valueLabel.Size = UDim2.new(0.3, 0, 0, 16)
-    valueLabel.Position = UDim2.new(0.7, 0, 0, 0)
-    valueLabel.BackgroundTransparency = 1
-    valueLabel.Text = tostring(initialV)
-    valueLabel.TextColor3 = accentColor or C.accent
-    valueLabel.Font = Enum.Font.GothamBold
-    valueLabel.TextSize = 12
-    valueLabel.TextXAlignment = Enum.TextXAlignment.Right
-    valueLabel.Parent = holder
-
-    local trackFrame = Instance.new("Frame")
-    trackFrame.Size = UDim2.new(1, 0, 0, 6)
-    trackFrame.Position = UDim2.new(0, 0, 0, 26)
-    trackFrame.BackgroundColor3 = Color3.fromRGB(46, 46, 58)
-    trackFrame.BorderSizePixel = 0
-    trackFrame.Parent = holder
-    local tc = Instance.new("UICorner"); tc.CornerRadius = UDim.new(1, 0); tc.Parent = trackFrame
-
-    local fill = Instance.new("Frame")
-    fill.BackgroundColor3 = accentColor or C.accent
-    fill.BorderSizePixel = 0
-    fill.Parent = trackFrame
-    local fc = Instance.new("UICorner"); fc.CornerRadius = UDim.new(1, 0); fc.Parent = fill
-
-    local knob = Instance.new("Frame")
-    knob.Size = UDim2.new(0, 14, 0, 14)
-    knob.AnchorPoint = Vector2.new(0.5, 0.5)
-    knob.Position = UDim2.new(0, 0, 0.5, 0)
-    knob.BackgroundColor3 = Color3.fromRGB(236, 236, 246)
-    knob.BorderSizePixel = 0
-    knob.ZIndex = 3
-    knob.Parent = trackFrame
-    local kc = Instance.new("UICorner"); kc.CornerRadius = UDim.new(1, 0); kc.Parent = knob
-
-    local hitbox = Instance.new("TextButton")
-    hitbox.Size = UDim2.new(1, 0, 0, 20)
-    hitbox.Position = UDim2.new(0, 0, 0.5, 0)
-    hitbox.AnchorPoint = Vector2.new(0, 0.5)
-    hitbox.BackgroundTransparency = 1
-    hitbox.Text = ""
-    hitbox.AutoButtonColor = false
-    hitbox.Parent = trackFrame
-
-    local function setValue(v, fire)
-        v = math.clamp(v, minV, maxV)
-        local p = (v - minV) / (maxV - minV)
-        fill.Size  = UDim2.new(p, 0, 1, 0)
-        knob.Position = UDim2.new(p, 0, 0.5, 0)
-        valueLabel.Text = tostring(math.floor(v + 0.5))
-        if fire then onChange(v) end
+local flyControl = vehicleTab:CreateToggle("VehicleFly", { Title = "Vehicle fly", Default = false })
+local driveControl = vehicleTab:CreateToggle("VehicleDrive", { Title = "Drive assist", Default = false })
+local aimControl = vehicleTab:CreateToggle("MouseAim", { Title = "Camera steering", Default = false })
+local wheelieControl = vehicleTab:CreateToggle("Wheelie", { Title = "Auto wheelie", Default = false })
+flyControl:OnChanged(function(value)
+    if not syncing then
+        setMode(value and "fly" or (mode == "fly" and "off" or mode))
     end
-
-    local sliderDragging = false
-    local function updateFromX(x)
-        local abs, size = trackFrame.AbsolutePosition.X, trackFrame.AbsoluteSize.X
-        if size <= 0 then return end
-        local p = math.clamp((x - abs) / size, 0, 1)
-        setValue(minV + p * (maxV - minV), true)
+end)
+driveControl:OnChanged(function(value)
+    if not syncing then
+        setMode(value and "drive" or (mode == "drive" and "off" or mode))
     end
-
-    hitbox.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            sliderDragging = true
-            updateFromX(input.Position.X)
-        end
-    end)
-    track(UserInputService.InputChanged:Connect(function(input)
-        if sliderDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            updateFromX(input.Position.X)
-        end
-    end))
-    track(UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            sliderDragging = false
-        end
-    end))
-
-    setValue(initialV, false)
-    return holder
+end)
+aimControl:OnChanged(function(value)
+    if not syncing then
+        aimOn = value
+    end
+end)
+wheelieControl:OnChanged(function(value)
+    if not syncing then
+        wheelieOn = value
+    end
+end)
+for _, entry in ipairs({
+    { "FlySpeed", "Fly speed", 60, 10, 500, function(value) FLY_SPEED = value end },
+    { "DriveSpeed", "Drive speed", 250, 16, 1400, function(value) DRIVE_SPEED = value end },
+    { "WheelieAngle", "Wheelie angle", 30, 0, 75, function(value) WHEELIE_ANGLE = value end },
+    { "HoverHeight", "Drive height", 2.5, 0, 12, function(value) DRIVE_HOVER = value end },
+}) do
+    local control = vehicleTab:CreateSlider(entry[1], { Title = entry[2], Default = entry[3], Min = entry[4], Max = entry[5], Rounding = 1 })
+    control:OnChanged(entry[6])
 end
-
-local W, TOP    = 240, 34
-local BODY_H    = 286
-local H         = TOP + BODY_H
-
-local shadow = Instance.new("Frame")
-shadow.Size = UDim2.new(0, W, 0, H)
-shadow.Position = UDim2.new(0.5, -W/2 + 4, 0.5, -H/2 + 4)
-shadow.BackgroundColor3 = Color3.new(0, 0, 0)
-shadow.BackgroundTransparency = 0.6
-shadow.BorderSizePixel = 0
-shadow.ZIndex = 0
-shadow.Parent = screenGui
-local shc = Instance.new("UICorner"); shc.CornerRadius = UDim.new(0, 10); shc.Parent = shadow
-
-local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, W, 0, H)
-mainFrame.Position = UDim2.new(0.5, -W/2, 0.5, -H/2)
-mainFrame.BackgroundColor3 = C.bg
-mainFrame.BorderSizePixel = 0
-mainFrame.Active = true
-mainFrame.ZIndex = 1
-mainFrame.Parent = screenGui
-local mainCorner = Instance.new("UICorner"); mainCorner.CornerRadius = UDim.new(0, 10); mainCorner.Parent = mainFrame
-local mainStroke = Instance.new("UIStroke");  mainStroke.Color = C.stroke; mainStroke.Thickness = 1; mainStroke.Parent = mainFrame
-
-local topBar = Instance.new("Frame")
-topBar.Size = UDim2.new(1, 0, 0, TOP)
-topBar.BackgroundColor3 = C.top
-topBar.BorderSizePixel = 0
-topBar.ZIndex = 2
-topBar.Parent = mainFrame
-local topCorner = Instance.new("UICorner"); topCorner.CornerRadius = UDim.new(0, 10); topCorner.Parent = topBar
-
-local topPatch = Instance.new("Frame")
-topPatch.Size = UDim2.new(1, 0, 0, 12)
-topPatch.Position = UDim2.new(0, 0, 1, -12)
-topPatch.BackgroundColor3 = C.top
-topPatch.BorderSizePixel = 0
-topPatch.ZIndex = 2
-topPatch.Parent = topBar
-
-local accentBar = Instance.new("Frame")
-accentBar.Size = UDim2.new(0, 3, 0, 14)
-accentBar.Position = UDim2.new(0, 12, 0.5, -7)
-accentBar.BackgroundColor3 = C.accent
-accentBar.BorderSizePixel = 0
-accentBar.ZIndex = 4
-accentBar.Parent = topBar
-local abc = Instance.new("UICorner"); abc.CornerRadius = UDim.new(0, 2); abc.Parent = accentBar
-
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -70, 1, 0)
-title.Position = UDim2.new(0, 24, 0, 0)
-title.BackgroundTransparency = 1
-title.Text = "Lunar Vehicle"
-title.TextColor3 = C.text
-title.Font = Enum.Font.GothamBold
-title.TextSize = 13
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.ZIndex = 4
-title.Parent = topBar
-
-local dragHandle = Instance.new("TextButton")
-dragHandle.Size = UDim2.new(1, -70, 1, 0)
-dragHandle.BackgroundTransparency = 1
-dragHandle.Text = ""
-dragHandle.AutoButtonColor = false
-dragHandle.ZIndex = 4
-dragHandle.Parent = topBar
-
-local function chromeBtn(text, xOff)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 22, 0, 22)
-    b.Position = UDim2.new(1, xOff, 0.5, -11)
-    b.BackgroundColor3 = C.btn
-    b.TextColor3 = C.muted
-    b.Text = text
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 13
-    b.AutoButtonColor = false
-    b.ZIndex = 5
-    b.Parent = topBar
-    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 6); c.Parent = b
-    b.MouseEnter:Connect(function() b.BackgroundColor3 = C.btnH; b.TextColor3 = C.text end)
-    b.MouseLeave:Connect(function() b.BackgroundColor3 = C.btn;  b.TextColor3 = C.muted end)
-    return b
-end
-
-local minBtn   = chromeBtn("–", -52)
-local closeBtn = chromeBtn("×", -28)
-
-local body = Instance.new("Frame")
-body.Size = UDim2.new(1, 0, 1, -TOP)
-body.Position = UDim2.new(0, 0, 0, TOP)
-body.BackgroundTransparency = 1
-body.ZIndex = 2
-body.Parent = mainFrame
-
-local HALF_W  = UDim2.new(0.5, -16, 0, 34)
-local FULL_W  = UDim2.new(1, -24, 0, 34)
-local LEFT_X  = 12
-local RIGHT_X = W/2 + 4
-
-local function modeBtn(text, xOff, size, yPos)
-    local b = Instance.new("TextButton")
-    b.Size = size
-    b.Position = UDim2.new(0, xOff, 0, yPos)
-    b.BackgroundColor3 = C.btn
-    b.TextColor3 = C.text
-    b.Text = text
-    b.Font = Enum.Font.GothamMedium
-    b.TextSize = 13
-    b.AutoButtonColor = false
-    b.ZIndex = 10
-    b.Parent = body
-    local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 8); c.Parent = b
-    b.MouseEnter:Connect(function()
-        if b.BackgroundColor3 == C.btn then b.BackgroundColor3 = C.btnH end
-    end)
-    b.MouseLeave:Connect(function()
-        if b.BackgroundColor3 == C.btnH then b.BackgroundColor3 = C.btn end
-    end)
-    return b
-end
-
-local flyBtn     = modeBtn("Fly",           LEFT_X,  HALF_W, 12)
-local driveBtn   = modeBtn("Drive",         RIGHT_X, HALF_W, 12)
-local aimBtn     = modeBtn("Mouse Aim",     LEFT_X,  FULL_W, 96)
-local wheelieBtn = modeBtn("Auto Wheelie",  LEFT_X,  FULL_W, 138)
-
-createSlider(body, 184, "Fly Speed",    FLY_MIN,   FLY_MAX,   FLY_SPEED,   C.accent, function(v) FLY_SPEED   = v end)
-createSlider(body, 232, "Drive Speed",  DRIVE_MIN, DRIVE_MAX, DRIVE_SPEED, C.accent, function(v) DRIVE_SPEED = v end)
 
 local function refreshButtons()
-    flyBtn.BackgroundColor3     = (mode == "fly")   and C.on     or C.btn
-    driveBtn.BackgroundColor3   = (mode == "drive") and C.on     or C.btn
-    aimBtn.BackgroundColor3     = aimOn             and C.aimOn  or C.btn
-    wheelieBtn.BackgroundColor3 = wheelieOn         and C.wheelOn or C.btn
+    syncing = true
+    flyControl:SetValue(mode == "fly")
+    driveControl:SetValue(mode == "drive")
+    aimControl:SetValue(aimOn)
+    wheelieControl:SetValue(wheelieOn)
+    syncing = false
 end
-refreshButtons()
-
-local panelDragging, dragStart, startPos = false, nil, nil
-dragHandle.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        panelDragging = true
-        dragStart = input.Position
-        startPos  = mainFrame.Position
-    end
-end)
-track(UserInputService.InputChanged:Connect(function(input)
-    if panelDragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-        local delta = input.Position - dragStart
-        mainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
-        shadow.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X + 4, startPos.Y.Scale, startPos.Y.Offset + delta.Y + 4)
-    end
-end))
-track(UserInputService.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        panelDragging = false
-    end
-end))
-
-local minimized = false
-minBtn.MouseButton1Click:Connect(function()
-    minimized = not minimized
-    body.Visible = not minimized
-    topPatch.Visible = not minimized
-    minBtn.Text = minimized and "+" or "–"
-    mainFrame.Size = minimized and UDim2.new(0, W, 0, TOP) or UDim2.new(0, W, 0, H)
-    shadow.Visible = not minimized
-end)
 
 local function getVehicle()
     local char = LocalPlayer.Character
@@ -348,12 +856,7 @@ local function updateVehicle()
         if currentVehicle ~= vehicle then
             cleanupForces()
             currentVehicle = vehicle
-            vehicleRoot = (vehicle:IsA("Model") and (vehicle.PrimaryPart or vehicle:FindFirstChildWhichIsA("BasePart"))) or seat
-            if vehicleRoot and vehicle:IsA("Model") then
-                for _, part in ipairs(vehicle:GetDescendants()) do
-                    if part:IsA("BasePart") then part.Anchored = false end
-                end
-            end
+            vehicleRoot = seat.AssemblyRootPart or seat
         end
     else
         if currentVehicle then
@@ -443,32 +946,19 @@ local function groundInfo()
     return hit
 end
 
-local function setMode(newMode)
+setMode = function(newMode)
     mode = newMode
     if mode == "off" and not (wheelieOn or aimOn) then cleanupForces() end
     refreshButtons()
 end
 
-flyBtn.MouseButton1Click:Connect(function()   setMode(mode == "fly" and "off" or "fly") end)
-driveBtn.MouseButton1Click:Connect(function() setMode(mode == "drive" and "off" or "drive") end)
-
-aimBtn.MouseButton1Click:Connect(function()
-    aimOn = not aimOn
-    if not aimOn and not wheelieOn and mode == "off" then cleanupForces() end
-    refreshButtons()
-end)
-
-wheelieBtn.MouseButton1Click:Connect(function()
-    wheelieOn = not wheelieOn
-    if not wheelieOn and not aimOn and mode == "off" then cleanupForces() end
-    refreshButtons()
-end)
-
 local mainLoop = RunService.RenderStepped:Connect(function(dt)
     updateVehicle()
     if not vehicleRoot then return end
 
-    local camCF    = Camera.CFrame
+    local camera = Workspace.CurrentCamera
+    if not camera then return end
+    local camCF = camera.CFrame
     local camLook  = camCF.LookVector
     local flatLook = Vector3.new(camLook.X, 0, camLook.Z)
     if flatLook.Magnitude > 0.001 then flatLook = flatLook.Unit else flatLook = Vector3.new(0, 0, -1) end
@@ -504,12 +994,12 @@ local mainLoop = RunService.RenderStepped:Connect(function(dt)
         ensureVelocity3D(); ensureBodyGyro()
 
         local moveDir = Vector3.zero
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then moveDir += camCF.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then moveDir -= camCF.LookVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then moveDir += camCF.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then moveDir -= camCF.RightVector end
-        if UserInputService:IsKeyDown(Enum.KeyCode.Space) then moveDir += worldUp end
-        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then moveDir -= worldUp end
+        if pressed(Enum.KeyCode.W) then moveDir = moveDir + camCF.LookVector end
+        if pressed(Enum.KeyCode.S) then moveDir = moveDir - camCF.LookVector end
+        if pressed(Enum.KeyCode.D) then moveDir = moveDir + camCF.RightVector end
+        if pressed(Enum.KeyCode.A) then moveDir = moveDir - camCF.RightVector end
+        if pressed(Enum.KeyCode.Space) then moveDir = moveDir + worldUp end
+        if pressed(Enum.KeyCode.LeftShift) then moveDir = moveDir - worldUp end
         if moveDir.Magnitude > 0 then moveDir = moveDir.Unit end
 
         bodyVelocity.Velocity = moveDir * FLY_SPEED
@@ -519,8 +1009,8 @@ local mainLoop = RunService.RenderStepped:Connect(function(dt)
         disableBodyGyro()
 
         local axis = 0
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then axis += 1 end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then axis -= 1 end
+        if pressed(Enum.KeyCode.W) then axis = axis + 1 end
+        if pressed(Enum.KeyCode.S) then axis = axis - 1 end
 
         local hit = groundInfo()
         local groundYVal = hit and hit.Position.Y or nil
@@ -564,13 +1054,45 @@ track(LocalPlayer.CharacterAdded:Connect(function()
     updateVehicle()
 end))
 
-closeBtn.MouseButton1Click:Connect(function()
-    cleanupForces()
-    currentVehicle, vehicleRoot = nil, nil
+
+local cleaned = false
+local function cleanupWheelie()
+    if cleaned then return end
+    cleaned = true
     mode = "off"
-    for _, c in ipairs(connections) do
-        pcall(function() c:Disconnect() end)
-    end
+    wheelieOn = false
+    aimOn = false
+    cleanupForces()
+    for _, connection in ipairs(connections) do connection:Disconnect() end
     connections = {}
-    screenGui:Destroy()
-end)
+    if not Library.Unloaded then Library:Destroy() end
+end
+
+environment.LelHubWheelieCleanup = cleanupWheelie
+if Library.OnUnload then track(Library.OnUnload:Connect(cleanupWheelie)) end
+vehicleTab:CreateButton({ Title = "Stop vehicle", Callback = function()
+    if vehicleRoot then
+        vehicleRoot.AssemblyLinearVelocity = Vector3.zero
+        vehicleRoot.AssemblyAngularVelocity = Vector3.zero
+    end
+    setMode("off")
+end })
+vehicleTab:CreateButton({ Title = "Flip upright", Callback = function()
+    if vehicleRoot then
+        local look = vehicleRoot.CFrame.LookVector
+        local forward = Vector3.new(look.X, 0, look.Z)
+        if forward.Magnitude < 0.01 then forward = Vector3.new(0, 0, -1) end
+        local position = vehicleRoot.Position + Vector3.new(0, 3, 0)
+        vehicleRoot.CFrame = CFrame.lookAt(position, position + forward)
+        vehicleRoot.AssemblyLinearVelocity = Vector3.zero
+        vehicleRoot.AssemblyAngularVelocity = Vector3.zero
+    end
+end })
+local sharedControls = installLelHubControls(Library, Window, {
+    Name = "wheelie",
+    BasicMovement = true,
+    Cleanup = cleanupWheelie,
+})
+syncing = false
+refreshButtons()
+Window:SelectTab(1)
