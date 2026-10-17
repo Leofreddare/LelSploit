@@ -1,3 +1,34 @@
+local function lelHubTitle(value)
+    local title = tostring(value or "")
+    title = title:gsub("<[^>]*>", ""):gsub("_", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
+    local names = {
+        ["WalkSpeed"] = "Walk speed", ["Walk Speed"] = "Walk speed",
+        ["JumpPower"] = "Jump power", ["NoClip"] = "Walk through walls", ["Noclip"] = "Walk through walls",
+        ["Fly"] = "Player flight", ["Fly Mode"] = "Player flight", ["Fly Speed"] = "Flight speed", ["Fly speed"] = "Flight speed",
+        ["Spin"] = "Spin character", ["Auto walk"] = "Walk forward automatically",
+        ["Fullbright"] = "Full brightness", ["Fullbright Intensity"] = "Brightness level",
+        ["Door ESP"] = "Highlight doors", ["Objective ESP"] = "Highlight objectives",
+        ["Entity Highlight"] = "Highlight entities", ["Gold Highlight"] = "Highlight gold",
+        ["Item Highlight"] = "Highlight items", ["Hiding ESP"] = "Highlight hiding spots",
+        ["ToolShed ESP"] = "Highlight tool sheds", ["Player ESP"] = "Highlight players",
+        ["Rainbow ESP"] = "Rainbow highlight colors", ["Enable Text"] = "Show highlight labels",
+        ["Text Size"] = "Label text size", ["Text Offset Y"] = "Label vertical offset",
+        ["Max ESP Distance"] = "Highlight distance limit", ["Anti CamShake"] = "Disable camera shake",
+        ["Aura"] = "Attack nearby enemies", ["Aura mode"] = "Attack targeting mode",
+        ["Aura radius"] = "Attack radius", ["Speed"] = "Enable speed override",
+        ["Collect speed"] = "Food collection travel speed", ["Auto guitar"] = "Play guitar automatically",
+        ["Farm wins"] = "Farm wins automatically", ["Fast parry"] = "Parry continuously",
+        ["Destroy UI"] = "Unload LelHub", ["Unload"] = "Unload LelHub",
+        ["Names and roles"] = "Show player labels", ["Ball ESP (Highlight)"] = "Highlight ball",
+        ["Ring ESP"] = "Highlight rings", ["Master Sell Loop"] = "Sell selected items automatically",
+        ["Auto Spam Spins"] = "Spin automatically", ["Remove All Knives"] = "Remove knives from plot",
+        ["Include Inventory in Loop"] = "Include inventory when selling",
+        ["Auto Collect GradeTokens"] = "Collect grade tokens automatically",
+        ["Auto Collect Cash"] = "Collect cash automatically", ["Auto Open Ready Packs"] = "Open ready packs automatically",
+    }
+    return names[title] or title
+end
+
 local function installLelHubControls(library, window, configuration)
     local players = game:GetService("Players")
     local player = players.LocalPlayer
@@ -42,8 +73,13 @@ local function installLelHubControls(library, window, configuration)
     end
 
     local function ui(parent, kind, ...)
+        local arguments = table.pack(...)
+        for index = 1, arguments.n do
+            local argument = arguments[index]
+            if type(argument) == "table" and argument.Title then argument.Title = lelHubTitle(argument.Title) end
+        end
         local method = parent["Create" .. kind] or parent["Add" .. kind] or parent[kind]
-        return method(parent, ...)
+        return method(parent, table.unpack(arguments, 1, arguments.n))
     end
 
     local function parts()
@@ -919,6 +955,7 @@ local function installLelHubControls(library, window, configuration)
     return { Cleanup = cleanup, Controls = controls, Launcher = launcher, Settings = settingsTab, State = state }
 end
 
+
 local function createLelHub(name)
     local environment = type(getgenv) == "function" and getgenv() or _G
     environment.LelHubModules = environment.LelHubModules or {}
@@ -941,30 +978,30 @@ local function createLelHub(name)
         if not self.Stopped then library:Notify({ Title = "LelHub", Content = tostring(message), Duration = 4 }) end
     end
     function hub:Tab(title, icon)
-        local tab = window:CreateTab({ Title = title, Icon = icon or "grid" })
+        local tab = window:CreateTab({ Title = lelHubTitle(title), Icon = icon or "grid" })
         self.Tabs[title] = tab
         return tab
     end
     function hub:Toggle(tab, id, title, callback, default)
-        local raw = tab:CreateToggle(id, { Title = title, Default = default == true })
+        local raw = tab:CreateToggle(id, { Title = lelHubTitle(title), Default = default == true })
         self.Controls[id] = raw
         raw:OnChanged(function(value) if not self.Stopped then callback(value) end end)
         return raw
     end
     function hub:Slider(tab, id, title, default, minimum, maximum, callback, decimals)
-        local raw = tab:CreateSlider(id, { Title = title, Default = default, Min = minimum, Max = maximum, Rounding = decimals or 0 })
+        local raw = tab:CreateSlider(id, { Title = lelHubTitle(title), Default = default, Min = minimum, Max = maximum, Rounding = decimals or 0 })
         self.Controls[id] = raw
         raw:OnChanged(function(value) if not self.Stopped then callback(value) end end)
         return raw
     end
     function hub:Dropdown(tab, id, title, values, default, callback)
-        local raw = tab:CreateDropdown(id, { Title = title, Values = values, Default = default, Multi = false })
+        local raw = tab:CreateDropdown(id, { Title = lelHubTitle(title), Values = values, Default = default, Multi = false })
         self.Controls[id] = raw
         raw:OnChanged(function(value) if not self.Stopped then callback(value) end end)
         return raw
     end
     function hub:Button(tab, title, callback)
-        return tab:CreateButton({ Title = title, Callback = function()
+        return tab:CreateButton({ Title = lelHubTitle(title), Callback = function()
             if self.Stopped then return end
             local success, message = pcall(callback)
             if not success then self:Notify("That action could not complete.") end
@@ -1001,18 +1038,17 @@ local function createLelHub(name)
     return hub
 end
 
-
 local hub = createLelHub("Murder_Mystery_2")
 local players = game:GetService("Players")
 local player = players.LocalPlayer
-local state = { Murderer = false, Sheriff = false, Innocent = false, Self = false, Names = true, Transparency = 0.65 }
+local state = { Murderer = false, Sheriff = false, Innocent = false, Self = false, Names = true, RoleLabels = true, Distance = false, Transparency = 0.65 }
 local colors = { Murderer = Color3.fromRGB(255, 90, 110), Sheriff = Color3.fromRGB(100, 160, 255), Innocent = Color3.fromRGB(100, 235, 160) }
 local highlights = {}
 local elapsed = 0
 
 local function roleOf(target)
     local knife, gun = false, false
-    for _, container in ipairs({ target.Character, target:FindFirstChildOfClass("Backpack") }) do
+    for _, container in pairs({ target.Character, target:FindFirstChildOfClass("Backpack") }) do
         if container then
             for _, tool in ipairs(container:GetChildren()) do
                 if tool:IsA("Tool") then
@@ -1050,7 +1086,7 @@ local function refresh()
                 local billboard = Instance.new("BillboardGui")
                 billboard.Name, billboard.Adornee, billboard.Parent = "LelHubRoleName", root, root
                 billboard.AlwaysOnTop = true
-                billboard.Size = UDim2.fromOffset(240, 42)
+                billboard.Size = UDim2.fromOffset(240, 60)
                 billboard.StudsOffset = Vector3.new(0, 3.5, 0)
                 local text = Instance.new("TextLabel")
                 text.Size, text.BackgroundTransparency = UDim2.fromScale(1, 1), 1
@@ -1063,19 +1099,31 @@ local function refresh()
             entry.Highlight.FillColor, entry.Highlight.OutlineColor = color, color
             entry.Highlight.FillTransparency = state.Transparency
             entry.Highlight.OutlineTransparency = 0
-            entry.Label.Enabled = state.Names
+            entry.Label.Enabled = state.Names or state.RoleLabels or state.Distance
             entry.Text.TextColor3 = color
             local distance = mine and math.floor((mine.Position - root.Position).Magnitude) or 0
-            entry.Text.Text = target.DisplayName .. " · " .. role .. "\n" .. distance .. " studs"
+            local lines = {}
+            if state.Names then table.insert(lines, target.DisplayName or target.Name) end
+            if state.RoleLabels then table.insert(lines, role) end
+            if state.Distance then table.insert(lines, tostring(distance) .. " studs") end
+            entry.Text.Text = table.concat(lines, "\n")
         end
     end
 end
 
-local tab = hub:Tab("Roles", "eye")
-for _, role in ipairs({ "Murderer", "Sheriff", "Innocent", "Self", "Names" }) do
-    hub:Toggle(tab, "Role" .. role, role == "Self" and "Highlight yourself" or role == "Names" and "Names and roles" or role, function(value) state[role] = value refresh() end, role == "Names")
+local tab = hub:Tab("Role highlights", "eye")
+local targets = tab:CreateSection("Player roles")
+for _, item in ipairs({ { "Murderer", "Highlight murderer" }, { "Sheriff", "Highlight sheriff / gun holder" }, { "Innocent", "Highlight innocents" } }) do
+    local role = item[1]
+    hub:Toggle(targets, "Role" .. role, item[2], function(value) state[role] = value refresh() end)
 end
-hub:Slider(tab, "RoleTransparency", "Highlight transparency", 0.65, 0, 1, function(value) state.Transparency = value refresh() end, 2)
+local display = tab:CreateSection("Display options")
+for _, item in ipairs({ { "Names", "Show player names", true }, { "RoleLabels", "Show role labels", true }, { "Distance", "Show distance", false }, { "Self", "Include your character", false } }) do
+    local property = item[1]
+    hub:Toggle(display, "Role" .. property, item[2], function(value) state[property] = value refresh() end, item[3])
+end
+hub:Slider(display, "RoleTransparency", "Highlight transparency", 0.65, 0, 1, function(value) state.Transparency = value refresh() end, 2)
+hub:Button(display, "Refresh highlights", refresh)
 hub:Connect(players.PlayerRemoving, clear)
 hub:Connect(game:GetService("RunService").Heartbeat, function(deltaTime)
     elapsed = elapsed + deltaTime

@@ -1,3 +1,34 @@
+local function lelHubTitle(value)
+    local title = tostring(value or "")
+    title = title:gsub("<[^>]*>", ""):gsub("_", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
+    local names = {
+        ["WalkSpeed"] = "Walk speed", ["Walk Speed"] = "Walk speed",
+        ["JumpPower"] = "Jump power", ["NoClip"] = "Walk through walls", ["Noclip"] = "Walk through walls",
+        ["Fly"] = "Player flight", ["Fly Mode"] = "Player flight", ["Fly Speed"] = "Flight speed", ["Fly speed"] = "Flight speed",
+        ["Spin"] = "Spin character", ["Auto walk"] = "Walk forward automatically",
+        ["Fullbright"] = "Full brightness", ["Fullbright Intensity"] = "Brightness level",
+        ["Door ESP"] = "Highlight doors", ["Objective ESP"] = "Highlight objectives",
+        ["Entity Highlight"] = "Highlight entities", ["Gold Highlight"] = "Highlight gold",
+        ["Item Highlight"] = "Highlight items", ["Hiding ESP"] = "Highlight hiding spots",
+        ["ToolShed ESP"] = "Highlight tool sheds", ["Player ESP"] = "Highlight players",
+        ["Rainbow ESP"] = "Rainbow highlight colors", ["Enable Text"] = "Show highlight labels",
+        ["Text Size"] = "Label text size", ["Text Offset Y"] = "Label vertical offset",
+        ["Max ESP Distance"] = "Highlight distance limit", ["Anti CamShake"] = "Disable camera shake",
+        ["Aura"] = "Attack nearby enemies", ["Aura mode"] = "Attack targeting mode",
+        ["Aura radius"] = "Attack radius", ["Speed"] = "Enable speed override",
+        ["Collect speed"] = "Food collection travel speed", ["Auto guitar"] = "Play guitar automatically",
+        ["Farm wins"] = "Farm wins automatically", ["Fast parry"] = "Parry continuously",
+        ["Destroy UI"] = "Unload LelHub", ["Unload"] = "Unload LelHub",
+        ["Names and roles"] = "Show player labels", ["Ball ESP (Highlight)"] = "Highlight ball",
+        ["Ring ESP"] = "Highlight rings", ["Master Sell Loop"] = "Sell selected items automatically",
+        ["Auto Spam Spins"] = "Spin automatically", ["Remove All Knives"] = "Remove knives from plot",
+        ["Include Inventory in Loop"] = "Include inventory when selling",
+        ["Auto Collect GradeTokens"] = "Collect grade tokens automatically",
+        ["Auto Collect Cash"] = "Collect cash automatically", ["Auto Open Ready Packs"] = "Open ready packs automatically",
+    }
+    return names[title] or title
+end
+
 local function installLelHubControls(library, window, configuration)
     local players = game:GetService("Players")
     local player = players.LocalPlayer
@@ -42,8 +73,13 @@ local function installLelHubControls(library, window, configuration)
     end
 
     local function ui(parent, kind, ...)
+        local arguments = table.pack(...)
+        for index = 1, arguments.n do
+            local argument = arguments[index]
+            if type(argument) == "table" and argument.Title then argument.Title = lelHubTitle(argument.Title) end
+        end
         local method = parent["Create" .. kind] or parent["Add" .. kind] or parent[kind]
-        return method(parent, ...)
+        return method(parent, table.unpack(arguments, 1, arguments.n))
     end
 
     local function parts()
@@ -941,30 +977,30 @@ local function createLelHub(name)
         if not self.Stopped then library:Notify({ Title = "LelHub", Content = tostring(message), Duration = 4 }) end
     end
     function hub:Tab(title, icon)
-        local tab = window:CreateTab({ Title = title, Icon = icon or "grid" })
+        local tab = window:CreateTab({ Title = lelHubTitle(title), Icon = icon or "grid" })
         self.Tabs[title] = tab
         return tab
     end
     function hub:Toggle(tab, id, title, callback, default)
-        local raw = tab:CreateToggle(id, { Title = title, Default = default == true })
+        local raw = tab:CreateToggle(id, { Title = lelHubTitle(title), Default = default == true })
         self.Controls[id] = raw
         raw:OnChanged(function(value) if not self.Stopped then callback(value) end end)
         return raw
     end
     function hub:Slider(tab, id, title, default, minimum, maximum, callback, decimals)
-        local raw = tab:CreateSlider(id, { Title = title, Default = default, Min = minimum, Max = maximum, Rounding = decimals or 0 })
+        local raw = tab:CreateSlider(id, { Title = lelHubTitle(title), Default = default, Min = minimum, Max = maximum, Rounding = decimals or 0 })
         self.Controls[id] = raw
         raw:OnChanged(function(value) if not self.Stopped then callback(value) end end)
         return raw
     end
     function hub:Dropdown(tab, id, title, values, default, callback)
-        local raw = tab:CreateDropdown(id, { Title = title, Values = values, Default = default, Multi = false })
+        local raw = tab:CreateDropdown(id, { Title = lelHubTitle(title), Values = values, Default = default, Multi = false })
         self.Controls[id] = raw
         raw:OnChanged(function(value) if not self.Stopped then callback(value) end end)
         return raw
     end
     function hub:Button(tab, title, callback)
-        return tab:CreateButton({ Title = title, Callback = function()
+        return tab:CreateButton({ Title = lelHubTitle(title), Callback = function()
             if self.Stopped then return end
             local success, message = pcall(callback)
             if not success then self:Notify("That action could not complete.") end
@@ -1018,7 +1054,7 @@ local function createGameInterface(hub, style)
     local function element(raw, kind, key, config)
         config = config or {}
         key = key or config.Flag or nextId()
-        local title = config.Title or config.Name or config.Text or "Option"
+        local title = lelHubTitle(config.Title or config.Name or config.Text or "Option")
         local default = config.Default
         if default == nil then default = config.CurrentValue end
         if default == nil then default = config.CurrentText end
@@ -1135,7 +1171,23 @@ local function createGameInterface(hub, style)
             if style == "Vapor" then settings.ChangedCallback = config.Callback else settings.Callback = config.Callback end
             return raw:CreateKeybind(nextId(), settings)
         end
-        for _, method in ipairs({ "CreateParagraph", "CreateLabel", "AddLabel", "AddParagraph", "CreateDivider", "AddDivider" }) do group[method] = status end
+        function group:CreateLabel(value)
+            local text = type(value) == "table" and (value.Text or value.Title or value.Content) or value
+            text = tostring(text or "")
+            if text:lower():find("developer:", 1, true) then return status() end
+            local native = raw:CreateParagraph(nextId(), { Title = "", Content = text })
+            local label = { Native = native, Value = text }
+            function label:Set(value)
+                self.Value = tostring(type(value) == "table" and (value.Content or value.Text or value.Title or "") or value)
+                native:SetValue(self.Value)
+            end
+            label.SetText, label.SetTitle, label.SetContent = label.Set, label.Set, label.Set
+            function label:Destroy() if native.Destroy then native:Destroy() end end
+            label.Remove = label.Destroy
+            return label
+        end
+        group.AddLabel = group.CreateLabel
+        for _, method in ipairs({ "CreateParagraph", "AddParagraph", "CreateDivider", "AddDivider" }) do group[method] = status end
         return group
     end
     local window = {}
@@ -1195,7 +1247,7 @@ local function installNativeUI(hub)
     end
     function native:Control(parent, kind, title, default, callback, minimum, maximum)
         local group = self:Group(parent)
-        local settings = { Title = title, Default = default }
+        local settings = { Title = lelHubTitle(title), Default = default }
         if kind == "Slider" then
             settings.Min, settings.Max, settings.Rounding = minimum, maximum, 2
             if title:lower():find("walk", 1, true) then settings.Min, settings.Max = 16, 500 end
@@ -1233,7 +1285,7 @@ local function installNativeUI(hub)
                 parent = parent.Parent
             end
         end
-        return text ~= "" and text:gsub("<[^>]*>", "") or object.Name
+        return lelHubTitle(text ~= "" and text or object.Name)
     end
     local ignored = { X=true, ["×"]=true, ["✕"]=true, ["−"]=true, Close=true, Menu=true, Main=true, Settings=true, Credits=true, Combat=true, Movement=true, Visuals=true, Farming=true, Misc=true, Rage=true, Tracker=true, Teleports=true }
     local ignoredNames = {closebtn=true,closebutton=true,btnclose=true,hidebtn=true,openbutton=true,reopenbtn=true,mainbtn=true,trackbtn=true,telebtn=true,tabbtn=true,catbutton=true}

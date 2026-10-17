@@ -21,7 +21,7 @@ local busy = false
 
 LelUI:Control(nil, "Dropdown", "Island", CURRENT_ISLAND, function(value) CURRENT_ISLAND = value end, ISLANDS)
 LelUI:Control(nil, "Dropdown", "Plot", CURRENT_PLOT, function(value) CURRENT_PLOT = value end, PLOTS)
-Hub:Input("Teleport delay", tostring(TELEPORT_DELAY), function(value) local number = tonumber(value) if number then TELEPORT_DELAY = number end end)
+Hub:Input("Teleport delay (seconds)", tostring(TELEPORT_DELAY), function(value) local number = tonumber(value) if number then TELEPORT_DELAY = number end end)
 
 
 local function getSafeZone()
@@ -82,8 +82,8 @@ local function teleportHome()
 end
 
 
-Hub:Button(Hub.Tabs.Game, "Collect", teleportOnce)
-Hub:Button(Hub.Tabs.Game, "Home", teleportHome)
+Hub:Button(Hub.Tabs.Game, "Collect from selected island", teleportOnce)
+Hub:Button(Hub.Tabs.Game, "Return to your plot", teleportHome)
 
 
 UserInputService.InputBegan:Connect(function(input, gp)

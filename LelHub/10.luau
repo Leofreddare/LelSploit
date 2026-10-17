@@ -1,3 +1,34 @@
+local function lelHubTitle(value)
+    local title = tostring(value or "")
+    title = title:gsub("<[^>]*>", ""):gsub("_", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
+    local names = {
+        ["WalkSpeed"] = "Walk speed", ["Walk Speed"] = "Walk speed",
+        ["JumpPower"] = "Jump power", ["NoClip"] = "Walk through walls", ["Noclip"] = "Walk through walls",
+        ["Fly"] = "Player flight", ["Fly Mode"] = "Player flight", ["Fly Speed"] = "Flight speed", ["Fly speed"] = "Flight speed",
+        ["Spin"] = "Spin character", ["Auto walk"] = "Walk forward automatically",
+        ["Fullbright"] = "Full brightness", ["Fullbright Intensity"] = "Brightness level",
+        ["Door ESP"] = "Highlight doors", ["Objective ESP"] = "Highlight objectives",
+        ["Entity Highlight"] = "Highlight entities", ["Gold Highlight"] = "Highlight gold",
+        ["Item Highlight"] = "Highlight items", ["Hiding ESP"] = "Highlight hiding spots",
+        ["ToolShed ESP"] = "Highlight tool sheds", ["Player ESP"] = "Highlight players",
+        ["Rainbow ESP"] = "Rainbow highlight colors", ["Enable Text"] = "Show highlight labels",
+        ["Text Size"] = "Label text size", ["Text Offset Y"] = "Label vertical offset",
+        ["Max ESP Distance"] = "Highlight distance limit", ["Anti CamShake"] = "Disable camera shake",
+        ["Aura"] = "Attack nearby enemies", ["Aura mode"] = "Attack targeting mode",
+        ["Aura radius"] = "Attack radius", ["Speed"] = "Enable speed override",
+        ["Collect speed"] = "Food collection travel speed", ["Auto guitar"] = "Play guitar automatically",
+        ["Farm wins"] = "Farm wins automatically", ["Fast parry"] = "Parry continuously",
+        ["Destroy UI"] = "Unload LelHub", ["Unload"] = "Unload LelHub",
+        ["Names and roles"] = "Show player labels", ["Ball ESP (Highlight)"] = "Highlight ball",
+        ["Ring ESP"] = "Highlight rings", ["Master Sell Loop"] = "Sell selected items automatically",
+        ["Auto Spam Spins"] = "Spin automatically", ["Remove All Knives"] = "Remove knives from plot",
+        ["Include Inventory in Loop"] = "Include inventory when selling",
+        ["Auto Collect GradeTokens"] = "Collect grade tokens automatically",
+        ["Auto Collect Cash"] = "Collect cash automatically", ["Auto Open Ready Packs"] = "Open ready packs automatically",
+    }
+    return names[title] or title
+end
+
 local function installLelHubControls(library, window, configuration)
     local players = game:GetService("Players")
     local player = players.LocalPlayer
@@ -42,8 +73,13 @@ local function installLelHubControls(library, window, configuration)
     end
 
     local function ui(parent, kind, ...)
+        local arguments = table.pack(...)
+        for index = 1, arguments.n do
+            local argument = arguments[index]
+            if type(argument) == "table" and argument.Title then argument.Title = lelHubTitle(argument.Title) end
+        end
         local method = parent["Create" .. kind] or parent["Add" .. kind] or parent[kind]
-        return method(parent, ...)
+        return method(parent, table.unpack(arguments, 1, arguments.n))
     end
 
     local function parts()
@@ -918,6 +954,7 @@ local function installLelHubControls(library, window, configuration)
 
     return { Cleanup = cleanup, Controls = controls, Launcher = launcher, Settings = settingsTab, State = state }
 end
+
 
 local tracebackFunction = type(debug) == "table" and type(debug.traceback) == "function" and debug.traceback or nil
 
