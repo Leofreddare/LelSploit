@@ -9773,6 +9773,10 @@ class LelSploitWindow(QMainWindow):
         self.scriptblox_button.setMinimumWidth(104)
         self.scriptblox_button.clicked.connect(self.open_scriptblox)
         self.set_button_icon(self.scriptblox_button, "scriptblox")
+        self.lelhub_button = QPushButton("LelHub")
+        self.lelhub_button.setToolTip("Open and execute LelHub in a new tab")
+        self.lelhub_button.clicked.connect(self.open_lelhub)
+        self.set_button_icon(self.lelhub_button, "lelhub")
         self.extensions_button = QPushButton()
         self.extensions_button.setObjectName("iconButton")
         self.extensions_button.setFixedSize(36, 36)
@@ -9872,6 +9876,7 @@ class LelSploitWindow(QMainWindow):
             (self.save_button, "file"),
             (self.reattach_button, "attach"),
             (self.scriptblox_button, "scriptblox"),
+            (self.lelhub_button, "lelhub"),
             (self.roblox_button, "start"),
         ):
             button.setFixedSize(text_button_size)
@@ -9893,7 +9898,8 @@ class LelSploitWindow(QMainWindow):
         controls.addWidget(self.execute_button, 0, 0)
         controls.addWidget(self.reattach_button, 0, 1)
         controls.addWidget(self.scriptblox_button, 0, 2)
-        controls.setColumnStretch(3, 1)
+        controls.addWidget(self.lelhub_button, 0, 3)
+        controls.setColumnStretch(4, 1)
 
         right_top = QHBoxLayout()
         self.header_layout = right_top
@@ -9906,7 +9912,7 @@ class LelSploitWindow(QMainWindow):
         right_top.addWidget(self.tools_button)
         right_top.addWidget(self.documentation_button)
         right_top.addWidget(self.settings_button)
-        controls.addLayout(right_top, 0, 4, 1, 7, Qt.AlignmentFlag.AlignRight)
+        controls.addLayout(right_top, 0, 5, 1, 7, Qt.AlignmentFlag.AlignRight)
         layout.addWidget(self.editor_tabs, 1)
         layout.addLayout(controls)
 
@@ -11673,6 +11679,12 @@ class LelSploitWindow(QMainWindow):
         except Exception as exc:
             self.fastflags_window = None
             self.log(f"Could not preload FastFlags: {exc}", "warning")
+
+    def open_lelhub(self):
+        code = 'loadstring(game:HttpGet("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/loader.luau"))()\n'
+        editor = self.add_editor_tab("LelHub.luau", code, select=True)
+        editor.setFocus()
+        self.execute()
 
     def open_scriptblox(self):
         if self._toggle_window(self.scriptblox_window):
