@@ -581,11 +581,11 @@ local function installLelHubExpandedTools(library, window, configuration)
         table.insert(connections, connection)
         return connection
     end
-    local function notify(message) library:Notify({ Title = lelHubTitle("LelHub"), Content = message, Duration = 4 }) end
+    local function notify(message) library:Notify({ Title = "LelHub", Content = message, Duration = 4 }) end
     local function control(parent, kind, title, default, callback, values, maximum)
         if kind == "Slider" then callback, values, maximum = maximum, callback, values end
         serial = serial + 1
-        local options = { Title = lelHubTitle(title), Default = default }
+        local options = { Title = title, Default = default }
         if kind == "Slider" then options.Min, options.Max, options.Rounding = values, maximum, 2 end
         if kind == "Dropdown" then options.Values, options.Multi = values, false end
         local item = parent["Create" .. kind](parent, "LelExpanded_" .. serial, options)
@@ -595,7 +595,7 @@ local function installLelHubExpandedTools(library, window, configuration)
         return item
     end
     local function button(parent, title, callback)
-        parent:CreateButton({ Title = lelHubTitle(title), Callback = function()
+        parent:CreateButton({ Title = title, Callback = function()
             if stopped then return end
             local ok, result = pcall(callback)
             if not ok then notify("That action is unavailable right now.") elseif type(result) == "string" then notify(result) end
@@ -626,7 +626,7 @@ local function installLelHubExpandedTools(library, window, configuration)
     baselines[lighting] = {}
     for _, property in ipairs({ "FogStart", "FogEnd", "ClockTime", "Brightness", "GlobalShadows" }) do baselines[lighting][property] = { lighting[property] } end
     baselines[workspace] = { Gravity = { workspace.Gravity } }
-    local playerTab = configuration.ExpandedPlayerTab or window:CreateTab({ Title = lelHubTitle("Player"), Icon = "user" })
+    local playerTab = configuration.ExpandedPlayerTab or window:CreateTab({ Title = "Player", Icon = "user" })
     local jumping = playerTab:CreateSection("Jumping")
     local bunnyHop, jumpHeight, slope = false, nil, nil
     local resetting = false
@@ -682,7 +682,7 @@ local function installLelHubExpandedTools(library, window, configuration)
         if jumpHeight then remember(human, "JumpHeight") remember(human, "UseJumpPower") human.UseJumpPower = false human.JumpHeight = jumpHeight end
         if slope then remember(human, "MaxSlopeAngle") human.MaxSlopeAngle = slope end
     end)
-    local playersTab = configuration.ExpandedPlayersTab or window:CreateTab({ Title = lelHubTitle("Players"), Icon = "users" })
+    local playersTab = configuration.ExpandedPlayersTab or window:CreateTab({ Title = "Players", Icon = "users" })
     local selected, follow, orbit, orbitRadius, followDistance, angle = nil, false, false, 8, 5, 0
     local targetSection = playersTab:CreateSection("Target Actions")
     local names, targetDropdown = { "None" }, nil
@@ -694,21 +694,30 @@ local function installLelHubExpandedTools(library, window, configuration)
         if selected == leaving then selected, follow, orbit = nil, false, false end
     end
     refresh()
-    targetDropdown = control(targetSection, "Dropdown", "Target", "None", function(value) selected = players:FindFirstChild(value) end, names)
+    local function target()
+        if configuration.GetSelectedPlayer then return configuration.GetSelectedPlayer() end
+        return selected
+    end
+    if not configuration.GetSelectedPlayer then
+        targetDropdown = control(targetSection, "Dropdown", "Target", "None", function(value) selected = players:FindFirstChild(value) end, names)
+    end
     control(targetSection, "Toggle", "Follow", false, function(value) follow = value end)
     control(targetSection, "Slider", "Follow Distance", 5, 2, 30, function(value) followDistance = value end)
     control(targetSection, "Toggle", "Orbit", false, function(value) orbit = value end)
     control(targetSection, "Slider", "Orbit Radius", 8, 3, 40, function(value) orbitRadius = value end)
-    button(targetSection, "Teleport Behind Target", function()
+    if not configuration.HasPlayerTeleport then
+    button(targetSection, "Teleport To Player", function()
+        local selected = target()
         local root = selected and rootOf(selected.Character)
         if root then return teleport(root.CFrame * CFrame.new(0, 0, followDistance)) end
         return "Select an available target."
     end)
-    button(targetSection, "Copy Username", function() if selected and setclipboard then setclipboard(selected.Name) end end)
-    button(targetSection, "Copy User ID", function() if selected and setclipboard then setclipboard(tostring(selected.UserId)) end end)
+    end
+    button(targetSection, "Copy Username", function() local selected = target() if selected and setclipboard then setclipboard(selected.Name) end end)
+    button(targetSection, "Copy User ID", function() local selected = target() if selected and setclipboard then setclipboard(tostring(selected.UserId)) end end)
     connect(players.PlayerAdded, function() refresh() end)
     connect(players.PlayerRemoving, refresh)
-    local world = window:CreateTab({ Title = lelHubTitle("Environment"), Icon = "sun" })
+    local world = window:CreateTab({ Title = "Environment", Icon = "sun" })
     local scene = world:CreateSection("Lighting")
     local noFog, noEffects, noParticles = false, false, false
     control(scene, "Toggle", "No Fog", false, function(value)
@@ -754,6 +763,7 @@ local function installLelHubExpandedTools(library, window, configuration)
         local human, root = humanoid(), rootOf(player.Character)
         if bunnyHop and human and human.FloorMaterial ~= Enum.Material.Air then human.Jump = true end
         if autoUse and os.clock() - lastUse >= useDelay then lastUse = os.clock() local tool = heldTool() if tool then pcall(function() tool:Activate() end) end end
+        local selected = target()
         local other = selected and rootOf(selected.Character)
         if other and root and human and not human.SeatPart and human.Health > 0 then
             if orbit then
@@ -771,6 +781,41 @@ local function installLelHubExpandedTools(library, window, configuration)
         for object in pairs(restores) do restore(object) end
         for _, object in ipairs(resources) do object:Destroy() end
     end
+end
+
+local function prepareLelHubWindow(window)
+    if window.LelHubTabs then return window end
+    local tabs = {}
+    window.LelHubTabs = tabs
+    local createTab = window.Tab or window.CreateTab or window.AddTab
+    local function title(value, section)
+        local text = tostring(value or ""):gsub("%s+", " "):match("^%s*(.-)%s*$")
+        if not section and text:lower() == "utilities" then text = "Player" end
+        if not section and text:lower() == "environment" then text = "World" end
+        if section then text = text:gsub("%s+[Oo]ptions$", "") end
+        return text, text:lower():gsub("[^%w]", "")
+    end
+    local function create(self, configuration)
+        local options = type(configuration) == "table" and configuration or { Title = configuration }
+        local name, key = title(options.Title)
+        if tabs[key] then return tabs[key] end
+        local copy = {}
+        for property, value in pairs(options) do copy[property] = value end
+        copy.Title = name
+        local tab = createTab(self, copy)
+        tabs[key] = tab
+        local sections = {}
+        local createSection = tab.Section or tab.CreateSection or tab.AddSection
+        local function section(parent, heading)
+            local label, id = title(heading, true)
+            if not sections[id] then sections[id] = createSection(parent, label) end
+            return sections[id]
+        end
+        tab.Section, tab.CreateSection, tab.AddSection = section, section, section
+        return tab
+    end
+    window.Tab, window.CreateTab, window.AddTab = create, create, create
+    return window
 end
 
 local function installLelHubControls(library, window, configuration)
@@ -818,7 +863,7 @@ local function installLelHubControls(library, window, configuration)
 
     local function notify(message)
         if not destroyed then
-            library:Notify({ Title = lelHubTitle("LelHub"), Content = message, Duration = 3 })
+            library:Notify({ Title = "LelHub", Content = message, Duration = 3 })
         end
     end
 
@@ -857,11 +902,11 @@ local function installLelHubControls(library, window, configuration)
     end
 
     local function toggle(parent, id, title, callback)
-        return register(parent, "Toggle", id, { Title = lelHubTitle(title), Default = false }, callback)
+        return register(parent, "Toggle", id, { Title = title, Default = false }, callback)
     end
 
     local function slider(parent, id, title, default, minimum, maximum, callback, rounding)
-        return register(parent, "Slider", id, { Title = lelHubTitle(title), Default = default, Min = minimum, Max = maximum, Rounding = rounding or 0 }, function(value)
+        return register(parent, "Slider", id, { Title = title, Default = default, Min = minimum, Max = maximum, Rounding = rounding or 0 }, function(value)
             local number = tonumber(value)
 
             if number and number == number and math.abs(number) ~= math.huge then
@@ -871,7 +916,7 @@ local function installLelHubControls(library, window, configuration)
     end
 
     local function button(parent, title, callback)
-        return ui(parent, "Button", { Title = lelHubTitle(title), Callback = function()
+        return ui(parent, "Button", { Title = title, Callback = function()
             local success, message = pcall(callback)
 
             if not success then
@@ -1001,10 +1046,11 @@ local function installLelHubControls(library, window, configuration)
         loading = wasLoading
     end
 
-    local utilityTab = configuration.PlayerTab or ui(window, "Tab", { Title = configuration.BasicMovement and "Player" or "Utilities", Icon = "user" })
-    local movement = ui(utilityTab, "Section", "Movement")
+    local utilityTab = configuration.PlayerTab or ui(window, "Tab", { Title = "Player", Icon = "user" })
+    local movement
 
     if configuration.BasicMovement then
+        movement = ui(utilityTab, "Section", "Movement")
         for _, entry in ipairs({ { "WalkSpeed", "Walk speed", 16, 16, 500 }, { "JumpPower", "Jump power", 50, 0, 500 }, { "HipHeight", "Hip height", (select(2, parts()) and select(2, parts()).HipHeight) or 4, 0, 50 } }) do
             local property = entry[1]
             if not configuration.Skip or not configuration.Skip[property] then
@@ -1042,7 +1088,7 @@ local function installLelHubControls(library, window, configuration)
 
     end
 
-    movement = ui(utilityTab, "Section", "Movement Options")
+    movement = movement or ui(utilityTab, "Section", "Movement")
     toggle(movement, "Sprint", "Hold Shift to sprint", function(value)
         state.Sprint = value
 
@@ -1139,7 +1185,7 @@ local function installLelHubControls(library, window, configuration)
     end)
 
     local places = ui(utilityTab, "Section", "Saved positions")
-    register(places, "Input", "WaypointName", { Title = lelHubTitle("Position name"), Default = "Home", Finished = true }, function(value)
+    register(places, "Input", "WaypointName", { Title = "Position name", Default = "Home", Finished = true }, function(value)
         waypointName = tostring(value):sub(1, 40)
     end)
     local waypointDropdown
@@ -1181,7 +1227,7 @@ local function installLelHubControls(library, window, configuration)
             refreshWaypoints()
         end
     end)
-    waypointDropdown = register(places, "Dropdown", "Waypoint", { Title = lelHubTitle("Saved position"), Values = {}, Multi = false }, function(value)
+    waypointDropdown = register(places, "Dropdown", "Waypoint", { Title = "Saved position", Values = {}, Multi = false }, function(value)
         selectedWaypoint = value
     end)
     button(places, "Go to saved position", function()
@@ -1201,7 +1247,7 @@ local function installLelHubControls(library, window, configuration)
         end
     end)
     local coordinates = ui(utilityTab, "Section", "Coordinates")
-    register(coordinates, "Input", "Coordinates", { Title = lelHubTitle("Coordinates"), Default = "", Placeholder = "X, Y, Z", Finished = true }, function(value)
+    register(coordinates, "Input", "Coordinates", { Title = "Coordinates", Default = "", Placeholder = "X, Y, Z", Finished = true }, function(value)
         coordinateText = tostring(value)
     end)
     button(coordinates, "Teleport to coordinates", function()
@@ -1290,7 +1336,7 @@ local function installLelHubControls(library, window, configuration)
             end)
             tool.Parent = backpack
         end)
-        local playersTab = ui(window, "Tab", { Title = lelHubTitle("Players"), Icon = "users" })
+        local playersTab = ui(window, "Tab", { Title = "Players", Icon = "users" })
         configuration.ExpandedPlayersTab = playersTab
         local names = { "Select a player" }
         local playerDropdown
@@ -1303,10 +1349,10 @@ local function installLelHubControls(library, window, configuration)
             if playerDropdown then playerDropdown:SetValues(names) end
         end
         refreshPlayers()
-        playerDropdown = register(playersTab, "Dropdown", "TargetPlayer", { Title = lelHubTitle("Player"), Values = names, Default = "Select a player", Multi = false }, function(value)
+        playerDropdown = register(playersTab, "Dropdown", "TargetPlayer", { Title = "Player", Values = names, Default = "Select a player", Multi = false }, function(value)
             selectedPlayer = value ~= "Select a player" and players:FindFirstChild(value) or nil
         end)
-        button(playersTab, "Teleport near player", function()
+        button(playersTab, "Teleport To Player", function()
             local root = selectedPlayer and selectedPlayer.Character and selectedPlayer.Character:FindFirstChild("HumanoidRootPart")
             if not root then return "Select an available player." end
             return teleport(root.CFrame * CFrame.new(0, 0, 4))
@@ -1400,16 +1446,20 @@ local function installLelHubControls(library, window, configuration)
         end
     end)
 
+    if configuration.BasicMovement then
+        configuration.GetSelectedPlayer = function() return selectedPlayer end
+        configuration.HasPlayerTeleport = true
+    end
     configuration.ExpandedPlayerTab = utilityTab
     expandedCleanup = installLelHubExpandedTools(library, window, configuration)
 
-    local settingsTab = configuration.SettingsTab or ui(window, "Tab", { Title = lelHubTitle("Settings"), Icon = "settings" })
+    local settingsTab = configuration.SettingsTab or ui(window, "Tab", { Title = "Settings", Icon = "settings" })
     local appearance = ui(settingsTab, "Section", "Appearance")
-    register(appearance, "Dropdown", "Theme", { Title = lelHubTitle("Theme"), Values = library.Themes or { "Dark", "Light" }, Default = library.Theme or "Dark", Multi = false }, function(value)
+    register(appearance, "Dropdown", "Theme", { Title = "Theme", Values = library.Themes or { "Dark", "Light" }, Default = library.Theme or "Dark", Multi = false }, function(value)
         library:SetTheme(value)
     end)
     local menuBind = ui(appearance, "Keybind", "LelShared_MenuKey", {
-        Title = lelHubTitle("Menu key"),
+        Title = "Menu key",
         Default = "RightShift",
         Mode = "Toggle",
         ChangedCallback = function(value)
@@ -1466,7 +1516,7 @@ local function installLelHubControls(library, window, configuration)
     connect(launcher.Activated, function()
         window:Minimize()
     end)
-    local showButton = register(appearance, "Toggle", "ShowButton", { Title = lelHubTitle("Show menu button"), Default = true }, function(value)
+    local showButton = register(appearance, "Toggle", "ShowButton", { Title = "Show menu button", Default = true }, function(value)
         launcher.Visible = value
     end)
     slider(appearance, "ButtonSize", "Menu button size", 52, 40, 72, function(value)
@@ -1529,7 +1579,14 @@ local function installLelHubControls(library, window, configuration)
 
     local moduleSection = ui(settingsTab, "Section", "Hubs")
     local moduleEnvironment = type(getgenv) == "function" and getgenv() or _G
-    local catalog = moduleEnvironment.LelHubCatalog or {
+    local routes = moduleEnvironment.LelHubRoutes
+    if tostring(configuration.Name):lower() == "global" and not routes then
+        local ok, result = pcall(function()
+            return lelHubCompileRemote("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/g.luau", "LelHub/Routes")()
+        end)
+        if ok and type(result) == "table" and type(result.P) == "table" and type(result.U) == "table" then routes = result moduleEnvironment.LelHubRoutes = routes end
+    end
+    local catalog = moduleEnvironment.LelHubCatalog or (routes and routes.C) or {
         { Name = "Global", File = "global.luau" },
         { Name = "Universal Enhancements", File = "universal.luau" },
         { Name = "Client Tools", File = "client.luau" },
@@ -1542,7 +1599,12 @@ local function installLelHubControls(library, window, configuration)
         end
     end
     local moduleChoice = moduleFiles.Global and "Global" or moduleNames[1]
-    register(moduleSection, "Dropdown", "HubChoice", { Title = lelHubTitle("Choose hub"), Values = moduleNames, Default = moduleChoice, Multi = false }, function(value)
+    if tostring(configuration.Name):lower() == "global" then
+        local selected = routes and (routes.U[game.GameId] or routes.P[game.PlaceId])
+        local file = selected and selected .. ".luau" or tostring(game.PlaceId) .. ".luau"
+        for name, candidate in pairs(moduleFiles) do if candidate == file then moduleChoice = name break end end
+    end
+    register(moduleSection, "Dropdown", "HubChoice", { Title = "Choose hub", Values = moduleNames, Default = moduleChoice, Multi = false }, function(value)
         moduleChoice = value
     end)
     button(moduleSection, "Open selected hub", function()
@@ -1788,7 +1850,7 @@ local function createLelHub(name)
     for _, active in pairs(environment.LelHubModules) do if active and active.Cleanup then active.Cleanup() end end
     if environment.LelHubGlobal and environment.LelHubGlobal.Cleanup then environment.LelHubGlobal.Cleanup() end
     local library = lelHubLoadInterface()
-    local window = library:CreateWindow({ Title = lelHubTitle("LelHub Murder Mystery 2"), SubTitle = "by LelSploit", Size = UDim2.fromOffset(760, 540), MinSize = Vector2.new(480, 360), TabWidth = 155, Resize = true, Acrylic = false, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightShift })
+    local window = prepareLelHubWindow(library:CreateWindow({ Title = lelHubTitle("LelHub Murder Mystery 2"), SubTitle = "by LelSploit", Size = UDim2.fromOffset(760, 540), MinSize = Vector2.new(480, 360), TabWidth = 155, Resize = true, Acrylic = false, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightShift }))
     local hub = { Library = library, Window = window, Connections = {}, Resources = {}, Tabs = {}, Controls = {}, Stopped = false }
     local serial = 0
     function hub:Connect(signal, callback)
@@ -1868,7 +1930,7 @@ end
 local hub = createLelHub("Murder_Mystery_2")
 local players = game:GetService("Players")
 local player = players.LocalPlayer
-local state = { Murderer = false, Sheriff = false, Innocent = false, Self = false, Names = true, RoleLabels = true, Distance = false, Transparency = 0.65 }
+local state = { Murderer = false, Sheriff = false, Innocent = false, Names = true, RoleLabels = true, Distance = false, Transparency = 0.65 }
 local colors = { Murderer = Color3.fromRGB(255, 90, 110), Sheriff = Color3.fromRGB(100, 160, 255), Innocent = Color3.fromRGB(100, 235, 160) }
 local highlights = {}
 local elapsed = 0
@@ -1903,7 +1965,7 @@ local function refresh()
         local root = character and character:FindFirstChild("HumanoidRootPart")
         local humanoid = character and character:FindFirstChildOfClass("Humanoid")
         local role = roleOf(target)
-        if not root or not humanoid or humanoid.Health <= 0 or not state[role] or (target == player and not state.Self) then
+        if not root or not humanoid or humanoid.Health <= 0 or not state[role] or target == player then
             clear(target)
         else
             local entry = highlights[target]
@@ -1947,7 +2009,7 @@ for _, item in ipairs({ { "Murderer", "Highlight murderer" }, { "Sheriff", "High
     hub:Toggle(targets, "Role" .. role, item[2], function(value) state[role] = value refresh() end)
 end
 local display = tab:CreateSection("Display")
-for _, item in ipairs({ { "Names", "Show player names", true }, { "RoleLabels", "Show role labels", true }, { "Distance", "Show distance", false }, { "Self", "Include your character", false } }) do
+for _, item in ipairs({ { "Names", "Show player names", true }, { "RoleLabels", "Show role labels", true }, { "Distance", "Show distance", false } }) do
     local property = item[1]
     hub:Toggle(display, "Role" .. property, item[2], function(value) state[property] = value refresh() end, item[3])
 end

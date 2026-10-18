@@ -60,6 +60,7 @@ local function read(file) return lelHubCompileRemote(base .. file, "LelHub/" .. 
 local routes = read("g.luau")()
 local environment = getgenv()
 environment.LelHubCatalog = routes.C
+environment.LelHubRoutes = routes
 local selected = routes.U[game.GameId] or routes.P[game.PlaceId]
 local allowed = {}
 for _, entry in ipairs(routes.C) do allowed[entry.File] = true end
