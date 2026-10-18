@@ -43,6 +43,31 @@ local function lelHubTitle(value)
 end
 
 local function installLelHubSpacing(window, connect)
+    local titleBar = window.TitleBar
+    if type(titleBar) == "table" and typeof(titleBar.TitleHolder) == "Instance" and typeof(titleBar.Title) == "Instance" and typeof(titleBar.SubTitle) == "Instance" then
+        local holder = titleBar.TitleHolder
+        holder.Position = UDim2.fromOffset(16, 6)
+        holder.Size = UDim2.new(1, -140, 0, 30)
+        holder.ClipsDescendants = true
+        local layout = holder:FindFirstChildOfClass("UIListLayout")
+        if not layout then layout = Instance.new("UIListLayout") layout.Parent = holder end
+        layout.FillDirection = Enum.FillDirection.Vertical
+        layout.SortOrder = Enum.SortOrder.LayoutOrder
+        layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+        layout.VerticalAlignment = Enum.VerticalAlignment.Top
+        layout.Padding = UDim.new(0, 2)
+        for index, label in ipairs({ titleBar.Title, titleBar.SubTitle }) do
+            label.AutomaticSize = Enum.AutomaticSize.None
+            label.Size = UDim2.new(1, 0, 0, index == 1 and 16 or 12)
+            label.LayoutOrder = index
+            label.TextSize = index == 1 and 13 or 11
+            label.TextScaled = false
+            label.TextWrapped = false
+            label.TextTruncate = Enum.TextTruncate.AtEnd
+            label.TextXAlignment = Enum.TextXAlignment.Left
+            label.TextYAlignment = Enum.TextYAlignment.Center
+        end
+    end
     local holder = window.ContainerHolder
     if typeof(holder) ~= "Instance" then return end
     local seen = {}
@@ -1359,7 +1384,7 @@ local function installLelHubControls(library, window, configuration)
     launcher.BackgroundColor3 = Color3.fromRGB(24, 27, 39)
     launcher.BackgroundTransparency = 0.08
     launcher.BorderSizePixel = 0
-    launcher.Image = "rbxassetid://123368435411946"
+    launcher.Image = "rbxassetid://74822717324149"
     launcher.ScaleType = Enum.ScaleType.Fit
     launcher.AutoButtonColor = false
     launcher.Parent = gui

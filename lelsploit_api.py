@@ -8,6 +8,7 @@ import shlex
 import shutil
 import struct
 import threading
+import time
 import uuid
 import zipfile
 from pathlib import Path
@@ -30,6 +31,7 @@ DEPENDENCIES = (
     "D3DX9_43.dll",
 )
 REQUIRED_FILES = (*DEPENDENCIES, "libls.dll")
+_DLL_SYNC_LOCK = threading.RLock()
 class LuaExpr:
     def __init__(self, source: str):
         if not isinstance(source, str) or not source.strip():
@@ -175,6 +177,15 @@ def _files_match(source: Path, target: Path) -> bool:
     except OSError:
         return False
 def ensure_appdata_dlls() -> Path:
+    """Sync AppData DLLs before loading; a loose local libls.dll takes priority.
+
+    SHA-256 equality leaves the installed file untouched. A different local
+    file replaces it atomically. With no loose file, the ZIP remains a fallback.
+    """
+    with _DLL_SYNC_LOCK:
+        return _ensure_appdata_dlls_locked()
+
+def _ensure_appdata_dlls_locked() -> Path:
     r"""Materialize all native DLLs into %APPDATA%\LelSploit.
     Packaged builds carry the DLLs inside \`\`lelsploit_dll_payload.zip\`\` as
     ordinary data. They are never loaded from the EXE directory or Nuitka's
@@ -183,12 +194,21 @@ def ensure_appdata_dlls() -> Path:
     """
     DLL_DIR.mkdir(parents=True, exist_ok=True)
     payload_path = RUNTIME_DIR / "lelsploit_dll_payload.zip"
+    local_libls = next((path for path in (
+        RUNTIME_DIR / "libls.dll",
+        RUNTIME_DIR / "dlls" / "libls.dll",
+        RUNTIME_DIR / "bin" / "libls.dll",
+    ) if path.is_file()), None)
     installed: set[str] = set()
     if payload_path.is_file():
         try:
             with zipfile.ZipFile(payload_path, "r") as archive:
                 members = {Path(name).name: name for name in archive.namelist()}
                 for name in REQUIRED_FILES:
+                    # A loose local libls.dll is authoritative. Do not first
+                    # overwrite AppData with an older payload copy.
+                    if name == "libls.dll" and local_libls is not None:
+                        continue
                     member = members.get(name)
                     if member is None:
                         continue
@@ -223,7 +243,7 @@ def ensure_appdata_dlls() -> Path:
             RUNTIME_DIR / "dlls" / name,
             RUNTIME_DIR / "bin" / name,
         )
-        source = next((candidate for candidate in candidates if candidate.is_file()), None)
+        source = local_libls if name == "libls.dll" else next((candidate for candidate in candidates if candidate.is_file()), None)
         if source is None:
             continue
         # _files_match compares file size and SHA-256. If libls.dll differs,
@@ -595,3 +615,120 @@ g.__PY_API_REFS[{_lua_string(key)}]=({expression})'''
         return "\n".join(lines)
 API = LelSploit
 ExploitAPI = LelSploit
+
+
+# Application-facing helpers live here; no separate bridge module is needed.
+class CombinedStop:
+    def __init__(self, *events):
+        self.events = tuple(event for event in events if event is not None)
+
+    def is_set(self):
+        return any(event.is_set() for event in self.events)
+
+    def wait(self, timeout=None):
+        if self.is_set():
+            return True
+
+        if timeout is None:
+            while not self.is_set():
+                time.sleep(0.05)
+            return True
+
+        deadline = time.monotonic() + max(0.0, float(timeout))
+
+        while not self.is_set():
+            remaining = deadline - time.monotonic()
+
+            if remaining <= 0:
+                return False
+
+            time.sleep(min(0.05, remaining))
+
+        return True
+
+
+def attach_api(log, stop, api=None, force=False):
+    if api is None:
+        api = LelSploit()
+        api.initialize()
+        force = True
+
+    if force or not api.is_attached():
+        api.attach()
+
+    deadline = time.monotonic() + 20
+
+    while not api.is_attached():
+        if stop.is_set():
+            return None
+
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                "LelSploit API did not report an attached client."
+            )
+
+        stop.wait(0.25)
+
+    if stop.is_set():
+        return None
+
+    log("LelSploit API reports attached.")
+    return api
+
+
+def run_script(source, log, stop, api=None):
+    api = attach_api(log, stop, api)
+
+    if api is None:
+        return None
+
+    api.execute(source)
+    log("Script sent. Check the client's output.")
+    return api
+
+
+def reattach_api(log, stop, api=None, initial=False):
+    api = attach_api(log, stop, api, force=True)
+
+    if api is not None:
+        log("Attached successfully." if initial else "Reattached successfully.")
+
+    return api
+
+
+def detach_api(api, log=None):
+    if api is None:
+        return None
+
+    detached = False
+
+    for name in (
+        "detach",
+        "disconnect",
+        "deattach",
+        "close",
+        "dispose",
+        "shutdown",
+    ):
+        method = getattr(api, name, None)
+
+        if not callable(method):
+            continue
+
+        try:
+            method()
+            detached = True
+            break
+        except TypeError:
+            continue
+        except Exception:
+            break
+
+    if log is not None:
+        log(
+            "Detached from Roblox."
+            if detached
+            else "Attachment state cleared."
+        )
+
+    return None

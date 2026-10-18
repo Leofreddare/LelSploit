@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+APP_VERSION = "1.1.0"
+
 import os
 import sys
 import traceback
@@ -62,7 +64,7 @@ def main() -> int:
             from lelsploit_local_proxy import main as run_proxy
             return int(run_proxy(args) or 0)
         from lelsploit_ui import main as run_ui
-        return int(run_ui() or 0)
+        return int(run_ui(app_version=APP_VERSION) or 0)
     except BaseException as exc:
         _report_error(exc, appdata)
         return 1

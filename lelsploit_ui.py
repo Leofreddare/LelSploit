@@ -1,5 +1,6 @@
 from lelsploit_layouts import OriginalLayoutFit
 import ast
+from lelsploit_editor_support import (find_spans, encoded_spans, masked_code_bytes, NONCODE_PATTERN, rank_entries, extend_api_index, SNIPPETS, document_sections, EXTRA_LIBRARY_MEMBERS, EXTENSION_START_GUIDE, MACRO_START_GUIDE, completion_argument_context)
 import base64
 from lelsploit_desktop import WindowRouter
 import math
@@ -45,7 +46,7 @@ APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 
 BASE_DIR = APPDATA_DIR
 
-from api_bridge import (
+from lelsploit_api import (
     CombinedStop,
     attach_api,
     run_script,
@@ -319,6 +320,9 @@ STATIC_MEMBER_FALLBACKS = {
     "UDim": {"new": "new(scale: number, offset: number): UDim"},
 }
 
+for _library, _members in EXTRA_LIBRARY_MEMBERS.items():
+    STATIC_MEMBER_FALLBACKS.setdefault(_library, {}).update(_members)
+
 GLOBAL_SIGNATURES = {
     "print": "print(...any): ()",
     "warn": "warn(...any): ()",
@@ -346,6 +350,7 @@ class RobloxApiIndex:
         self.enum_names = set(ROBLOX_COMMON_ENUMS.split())
         self.member_names = set()
         self._seed_fallbacks()
+        extend_api_index(self)
         self.member_names.update(name for members in self.classes.values() for name in members)
 
     def _seed_fallbacks(self):
@@ -522,7 +527,8 @@ class RobloxApiIndex:
         with self._lock:
             while class_name and class_name not in seen:
                 seen.add(class_name)
-                merged.update(self.classes.get(class_name, {}))
+                for name, meta in self.classes.get(class_name, {}).items():
+                    merged.setdefault(name, meta)
                 class_name = self.superclasses.get(class_name, "")
         if method_only:
             return {name: meta for name, meta in merged.items() if meta.get("kind") in {"Function", "YieldFunction"}}
@@ -2038,7 +2044,7 @@ try:
     from PyQt6.QtWidgets import (
         QAbstractButton, QToolTip, QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QFileDialog, QFrame, QInputDialog,
         QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-        QPushButton, QScrollArea, QStackedWidget, QTabWidget, QTabBar, QTextBrowser, QVBoxLayout, QWidget, QGraphicsOpacityEffect, QButtonGroup,
+        QPushButton, QScrollArea, QSplitter, QTextEdit, QStackedWidget, QTabWidget, QTabBar, QTextBrowser, QVBoxLayout, QWidget, QGraphicsOpacityEffect, QButtonGroup,
         QListWidget, QListWidgetItem, QAbstractItemView, QAbstractScrollArea, QSystemTrayIcon, QSpinBox, QSlider, QHeaderView, QTableWidget, QTableWidgetItem,
     )
     from PyQt6.Qsci import QsciScintilla, QsciLexerLua
@@ -3646,146 +3652,312 @@ class LuauLexer(QsciLexerLua):
         if number == 3:
             return LUAU_LIBRARIES
         if number == 4:
-            return " ".join(sorted(set("task math string table coroutine utf8 bit32 buffer".split()) | member_names))
+            with ROBLOX_API_INDEX._lock:
+                methods = {name for members in ROBLOX_API_INDEX.classes.values() for name, meta in members.items() if meta.get("kind") in {"Function", "YieldFunction"}}
+            methods.update(name for members in STATIC_MEMBER_FALLBACKS.values() for name, signature in members.items() if "(" in signature)
+            return " ".join(sorted(methods))
         if number == 5:
-            return f"{LUAU_TYPES} {ROBLOX_VALUE_TYPES}"
+            return " ".join(sorted(services))
         if number == 6:
             return " ".join(sorted(class_names))
         if number == 7:
-            return " ".join(sorted(services))
+            with ROBLOX_API_INDEX._lock:
+                properties = {name for members in ROBLOX_API_INDEX.classes.values() for name, meta in members.items() if meta.get("kind") in {"Property", "Event", "Callback"}}
+            return " ".join(sorted(properties))
         if number == 8:
-            return " ".join(sorted(enum_names))
+            return f"{LUAU_TYPES} {ROBLOX_VALUE_TYPES} " + " ".join(sorted(enum_names))
         return super().keywords(number) or ""
 
 
 class FindOverlay(QFrame):
+    """Search UI keeps keyboard focus while editor indicators show every hit."""
+    MATCH_INDICATOR = 22
+    ACTIVE_INDICATOR = 23
+
     def __init__(self, target):
         super().__init__(target)
         self.target = target
-        self.setObjectName("findOverlay")
-        self.setFixedSize(330, 36)
+        self._matches = []
+        self._active = -1
+        self._editing = False
+        self.setObjectName('findOverlay')
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        row = QHBoxLayout(self)
-        row.setContentsMargins(5, 4, 5, 4)
-        row.setSpacing(4)
-        self.query = QLineEdit()
-        self.query.setPlaceholderText("Find")
+        box = QVBoxLayout(self)
+        box.setContentsMargins(8, 8, 8, 8)
+        box.setSpacing(6)
+        row = QHBoxLayout()
+        self.query = SearchLineEdit()
+        self.query.setPlaceholderText('Find')
         self.query.setClearButtonEnabled(True)
+        self.query.setAccessibleName('Find text')
         self.query.textChanged.connect(self._live_search)
-        self.query.returnPressed.connect(lambda: self.search(True))
         row.addWidget(self.query, 1)
-        self.status = QLabel("")
-        self.status.setFixedWidth(58)
-        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status = QLabel('0 / 0')
+        self.status.setMinimumWidth(74)
         row.addWidget(self.status)
-        previous = QPushButton("↑")
-        previous.setToolTip("Previous match")
-        previous.clicked.connect(lambda: self.search(False))
-        row.addWidget(previous)
-        following = QPushButton("↓")
-        following.setToolTip("Next match")
-        following.clicked.connect(lambda: self.search(True))
-        row.addWidget(following)
-        close = QPushButton("×")
-        close.setToolTip("Close")
-        close.clicked.connect(self.hide_find)
-        row.addWidget(close)
-        for button in (previous, following, close):
-            button.setFixedSize(25, 26)
-            button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.previous = self._button('↑', 'Previous match (Shift+Enter / Shift+F3)', lambda: self.search(False))
+        self.following = self._button('↓', 'Next match (Enter / F3)', lambda: self.search(True))
+        self.close_button = self._button('×', 'Close search (Escape)', self.hide_find)
+        for button in (self.previous, self.following, self.close_button):
+            row.addWidget(button)
+        box.addLayout(row)
+        row = QHBoxLayout()
+        self.replacement = SearchLineEdit()
+        self.replacement.setPlaceholderText('Replace with')
+        self.replacement.setAccessibleName('Replacement text')
+        row.addWidget(self.replacement, 1)
+        self.replace_button = self._button('', 'Replace current match (Enter in replace field)', self.replace_one)
+        self.replace_all_button = self._button('', 'Replace every match in this file; undo in one step', self.replace_all)
+        for button, icon_name in ((self.replace_button, 'replace'), (self.replace_all_button, 'replace-all')):
+            button.setProperty('_lel_icon_name', icon_name)
+            button.setIcon(app_icon(icon_name))
+            button.setIconSize(QSize(18, 18))
+            button.setFixedSize(34, 34)
+        row.addWidget(self.replace_button)
+        row.addWidget(self.replace_all_button)
+        box.addLayout(row)
+        self.status.setObjectName('findStatus')
         self.setStyleSheet("""
             QFrame#findOverlay {
-                background: #101011;
-                border: 1px solid #303033;
-                border-radius: 6px;
+                background: #101214;
+                border: 1px solid #2d3237;
+                border-radius: 7px;
             }
-            QLineEdit {
-                min-height: 26px;
-                padding: 0 7px;
-                background: #080809;
-                color: #f0f0f0;
-                border: 1px solid #2b2b2d;
-                border-radius: 4px;
+            QFrame#findOverlay QLineEdit {
+                background: #0b0d0f;
+                color: #edf0f2;
+                border: 1px solid #272d32;
+                border-radius: 5px;
+                padding: 0 10px;
+                selection-background-color: #30383d;
+                selection-color: #ffffff;
+                font-size: 12px;
             }
-            QLabel { color: #8e8e92; background: transparent; font-size: 10px; }
-            QPushButton {
-                padding: 0;
-                background: transparent;
-                color: #cfcfd2;
+            QFrame#findOverlay QLineEdit:focus { border-color: #59675d; }
+            QFrame#findOverlay QLabel#findStatus {
+                color: #939da3;
+                background: #171b1e;
                 border: none;
-                border-radius: 3px;
+                border-radius: 5px;
+                font-size: 11px;
             }
-            QPushButton:hover { background: #242427; color: #ffffff; }
+            QFrame#findOverlay QPushButton {
+                background: #15191c;
+                color: #d5dbdf;
+                border: 1px solid #2a3035;
+                border-radius: 5px;
+                padding: 0;
+                font-size: 15px;
+            }
+            QFrame#findOverlay QPushButton:hover { background: #242b2f; border-color: #414b51; color: #ffffff; }
+            QFrame#findOverlay QPushButton:pressed { background: #30393d; }
+            QFrame#findOverlay QPushButton:disabled { color: #4e575d; background: #111416; border-color: #20262a; }
         """)
+        for field in (self.query, self.replacement):
+            field.setFixedHeight(32)
+        self.status.setFixedSize(72, 32)
+        self.status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        for button in (self.previous, self.following, self.close_button, self.replace_button, self.replace_all_button):
+            button.setFixedSize(32, 32)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+        for widget in (target, self.query, self.replacement):
+            widget.installEventFilter(self)
+        if isinstance(target, QsciScintilla):
+            for indicator, color, alpha in ((22, '#e6b450', 65), (23, '#ffb52e', 150)):
+                send = target.SendScintilla
+                send(target.SCI_INDICSETSTYLE, indicator, target.INDIC_ROUNDBOX)
+                send(target.SCI_INDICSETFORE, indicator, QColor(color))
+                send(target.SCI_INDICSETALPHA, indicator, alpha)
+                send(target.SCI_INDICSETOUTLINEALPHA, indicator, 240)
+                send(target.SCI_INDICSETUNDER, indicator, 1)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(65)
+        self._timer.timeout.connect(self._refresh)
+        target.textChanged.connect(self._document_changed)
+        self.setFixedHeight(88)
         self.hide()
-        target.installEventFilter(self)
+
+    def _button(self, text, tooltip, callback):
+        button = QPushButton(text)
+        button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
+        button.setAutoDefault(False)
+        button.setDefault(False)
+        button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        button.clicked.connect(callback)
+        return button
 
     def eventFilter(self, watched, event):
         if watched is self.target and event.type() == QEvent.Type.Resize:
             self._place()
+        if self.isVisible() and event.type() in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
+            key = event.key()
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_F3, Qt.Key.Key_Escape):
+                event.accept()
+                if event.type() == QEvent.Type.KeyPress:
+                    if key == Qt.Key.Key_Escape:
+                        self.hide_find()
+                    elif watched is self.replacement and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                        self.replace_one()
+                    else:
+                        self.search(not bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+                return True
         return super().eventFilter(watched, event)
 
     def _place(self):
-        x = max(6, self.target.width() - self.width() - 10)
-        self.move(x, 8)
+        self.setFixedWidth(max(300, min(500, self.target.width() - 20)))
+        self.move(max(0, self.target.width() - self.width() - 10), 8)
         self.raise_()
 
-    def show_find(self):
-        selected = ""
+    def _source(self):
+        return self.target.text() if isinstance(self.target, QsciScintilla) else self.target.toPlainText()
+
+    def _position(self):
         if isinstance(self.target, QsciScintilla):
-            selected = self.target.selectedText() if self.target.hasSelectedText() else ""
-        elif isinstance(self.target, QPlainTextEdit):
-            cursor = self.target.textCursor()
-            selected = cursor.selectedText() if cursor.hasSelection() else ""
-        if selected and "\n" not in selected and len(selected) <= 120:
+            return self.target.SendScintilla(self.target.SCI_GETCURRENTPOS)
+        return self.target.textCursor().position()
+
+    def _ranges(self, source, spans):
+        return encoded_spans(source, spans, 'utf-8' if isinstance(self.target, QsciScintilla) else 'utf-16-le')
+
+    def show_find(self):
+        if hasattr(self.target, '_hide_autocomplete'):
+            self.target._hide_autocomplete()
+        selected = self.target.selectedText() if isinstance(self.target, QsciScintilla) else self.target.textCursor().selectedText()
+        if selected and '\n' not in selected and '\u2029' not in selected and len(selected) < 500:
             self.query.setText(selected)
         self._place()
         self.show()
-        self.raise_()
-        self.query.setFocus()
+        self._refresh()
+        self.query.setFocus(Qt.FocusReason.ShortcutFocusReason)
         self.query.selectAll()
 
     def hide_find(self):
+        self._timer.stop()
         self.hide()
-        self.status.clear()
+        self._paint(clear=True)
         self.target.setFocus()
 
-    def _live_search(self, text):
-        if text:
-            self.search(True, wrap=True)
+    def _document_changed(self):
+        if self.isVisible() and not self._editing:
+            self._timer.start()
+
+    def _live_search(self, *args):
+        self._timer.stop()
+        if self.isVisible():
+            self._refresh()
+
+    def _refresh(self, preferred=None):
+        self._timer.stop()
+        position = self._position() if preferred is None else preferred
+        source = self._source()
+        self._matches = self._ranges(source, find_spans(source, self.query.text()))
+        self._active = next((i for i, (a, b) in enumerate(self._matches) if a >= position), 0) if self._matches else -1
+        self._select_active()
+
+    def _select_active(self):
+        if self._active >= 0:
+            a, b = self._matches[self._active]
+            if isinstance(self.target, QsciScintilla):
+                self.target.SendScintilla(self.target.SCI_SETSEL, a, b)
+                self.target.ensureCursorVisible()
+            else:
+                cursor = self.target.textCursor()
+                cursor.setPosition(a)
+                cursor.setPosition(b, QTextCursor.MoveMode.KeepAnchor)
+                self.target.setTextCursor(cursor)
+                self.target.ensureCursorVisible()
+        self.status.setText(f'{self._active + 1} / {len(self._matches)}' if self._matches else ('No matches' if self.query.text() else '0 / 0'))
+        for button in (self.previous, self.following, self.replace_button, self.replace_all_button):
+            button.setEnabled(bool(self._matches))
+        self._paint()
+
+    def _paint(self, clear=False):
+        if isinstance(self.target, QsciScintilla):
+            send = self.target.SendScintilla
+            for indicator in (22, 23):
+                send(self.target.SCI_SETINDICATORCURRENT, indicator)
+                send(self.target.SCI_INDICATORCLEARRANGE, 0, send(self.target.SCI_GETLENGTH))
+            if clear:
+                return
+            send(self.target.SCI_SETINDICATORCURRENT, 22)
+            for a, b in self._matches:
+                send(self.target.SCI_INDICATORFILLRANGE, a, b-a)
+            if self._active >= 0:
+                a, b = self._matches[self._active]
+                send(self.target.SCI_SETINDICATORCURRENT, 23)
+                send(self.target.SCI_INDICATORFILLRANGE, a, b-a)
         else:
-            self.status.clear()
+            selections = []
+            if not clear:
+                for i, (a, b) in enumerate(self._matches):
+                    selection = QTextEdit.ExtraSelection()
+                    selection.cursor = self.target.textCursor()
+                    selection.cursor.setPosition(a)
+                    selection.cursor.setPosition(b, QTextCursor.MoveMode.KeepAnchor)
+                    selection.format.setBackground(QColor('#b97820' if i == self._active else '#594720'))
+                    selection.format.setForeground(QColor('#ffffff'))
+                    selections.append(selection)
+            self.target.setExtraSelections(selections)
 
     def search(self, forward=True, wrap=True):
-        term = self.query.text()
-        if not term:
-            self.status.clear()
+        if self._timer.isActive():
+            self._refresh()
+        if not self._matches:
             return False
-        found = False
-        if isinstance(self.target, QsciScintilla):
-            data = term.encode("utf-8")
-            send = self.target.SendScintilla
-            send(self.target.SCI_SEARCHANCHOR)
-            pos = send(self.target.SCI_SEARCHNEXT if forward else self.target.SCI_SEARCHPREV, 0, data)
-            if pos < 0 and wrap:
-                send(self.target.SCI_GOTOPOS, 0 if forward else send(self.target.SCI_GETLENGTH))
-                send(self.target.SCI_SEARCHANCHOR)
-                pos = send(self.target.SCI_SEARCHNEXT if forward else self.target.SCI_SEARCHPREV, 0, data)
-            found = pos >= 0
-            if found:
-                self.target.ensureCursorVisible()
-        elif isinstance(self.target, QPlainTextEdit):
-            flags = QTextDocument.FindFlag(0)
-            if not forward:
-                flags |= QTextDocument.FindFlag.FindBackward
-            found = self.target.find(term, flags)
-            if not found and wrap:
+        self._active = (self._active + (1 if forward else -1)) % len(self._matches)
+        self._select_active()
+        return True
+
+    def _replace_ranges(self, ranges):
+        self._editing = True
+        replacement = self.replacement.text()
+        try:
+            if isinstance(self.target, QsciScintilla):
+                send = self.target.SendScintilla
+                self.target.beginUndoAction()
+                try:
+                    data = replacement.encode('utf-8')
+                    for a, b in reversed(ranges):
+                        send(self.target.SCI_SETTARGETSTART, a)
+                        send(self.target.SCI_SETTARGETEND, b)
+                        send(self.target.SCI_REPLACETARGET, len(data), data)
+                finally:
+                    self.target.endUndoAction()
+            else:
                 cursor = self.target.textCursor()
-                cursor.movePosition(QTextCursor.MoveOperation.Start if forward else QTextCursor.MoveOperation.End)
-                self.target.setTextCursor(cursor)
-                found = self.target.find(term, flags)
-        self.status.setText("" if found else "No match")
-        return found
+                cursor.beginEditBlock()
+                try:
+                    for a, b in reversed(ranges):
+                        cursor.setPosition(a)
+                        cursor.setPosition(b, QTextCursor.MoveMode.KeepAnchor)
+                        cursor.insertText(replacement)
+                finally:
+                    cursor.endEditBlock()
+        finally:
+            self._editing = False
+
+    def replace_one(self):
+        if self._timer.isActive():
+            self._refresh()
+        if self._active < 0:
+            return
+        a, b = self._matches[self._active]
+        self._replace_ranges([(a, b)])
+        size = len(self.replacement.text().encode('utf-8' if isinstance(self.target, QsciScintilla) else 'utf-16-le'))
+        self._refresh(preferred=a + (size if isinstance(self.target, QsciScintilla) else size // 2))
+
+    def replace_all(self):
+        if self._timer.isActive():
+            self._refresh()
+        count = len(self._matches)
+        if not count:
+            return
+        self._replace_ranges(list(self._matches))
+        self._refresh(preferred=0)
+        self.status.setText(f'Replaced {count}')
+
 
 
 class CompletionPopup(QFrame):
@@ -3813,6 +3985,12 @@ class CompletionPopup(QFrame):
         self.items.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.items.itemClicked.connect(self._choose_item)
         layout.addWidget(self.items)
+        self.detail = QLabel()
+        self.detail.setWordWrap(True)
+        self.detail.setMaximumHeight(62)
+        self.detail.setStyleSheet("color:#b4c8e1; background:#141a23; padding:6px; font-size:11px;")
+        layout.addWidget(self.detail)
+        self.items.currentItemChanged.connect(lambda item, previous: self.detail.setText(item.toolTip().split('\n')[0] if item else ''))
 
         self.setStyleSheet("""
             QFrame#completionPopup {
@@ -3872,6 +4050,7 @@ class CompletionPopup(QFrame):
         for name, kind in candidates:
             item = QListWidgetItem(name)
             item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setToolTip(self.editor._completion_detail(name, kind))
             icon = icons.get(kind)
             if icon is None and kind in {"method", "callback", "local_function"}:
                 icon = icons.get("function")
@@ -3892,7 +4071,7 @@ class CompletionPopup(QFrame):
         row_height = max(25, self.items.sizeHintForRow(0))
         visible_rows = min(13, self.items.count())
         width = max(245, min(480, widest + 64))
-        height = visible_rows * row_height + 6
+        height = visible_rows * row_height + 54
         self.resize(width, height)
         self.reposition()
         self.show()
@@ -4055,6 +4234,10 @@ class CodeEditor(QsciScintilla):
             send(self.SCI_INDICSETSTYLE, self._FUNCTION_INDICATOR, text_fore)
             send(self.SCI_INDICSETFORE, self._FUNCTION_INDICATOR, QColor("#7daee0"))
             send(self.SCI_INDICSETUNDER, self._FUNCTION_INDICATOR, 1)
+            for indicator, color in ((24, "#c4a7e7"), (25, "#a8c77a"), (26, "#86a8e7")):
+                send(self.SCI_INDICSETSTYLE, indicator, text_fore)
+                send(self.SCI_INDICSETFORE, indicator, QColor(color))
+                send(self.SCI_INDICSETUNDER, indicator, 1)
         except Exception:
             pass
         try:
@@ -4068,7 +4251,8 @@ class CodeEditor(QsciScintilla):
     def set_semantic_highlighting_enabled(self, enabled):
         self._semantic_enabled = bool(enabled)
         if not self._semantic_enabled:
-            self._clear_indicator(self._FUNCTION_INDICATOR)
+            for indicator in (self._FUNCTION_INDICATOR, 24, 25, 26):
+                self._clear_indicator(indicator)
         else:
             self._schedule_analysis()
 
@@ -4120,7 +4304,7 @@ class CodeEditor(QsciScintilla):
     def _extract_symbols(source):
         symbols = set()
         kinds = {}
-        types = {}
+        types = {'game': 'DataModel', 'workspace': 'Workspace', 'script': 'Instance'}
 
         def add_symbol(name, kind="variable", type_name=""):
             if not name or name in LUAU_KEYWORD_SET:
@@ -4182,12 +4366,17 @@ class CodeEditor(QsciScintilla):
 
         for _ in range(3):
             changed = False
+            for alias in re.finditer(r"\blocal\s+([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\s*(?=[;\n]|$)", source):
+                target, base = alias.groups()
+                if base in types and types.get(target) != types[base]:
+                    add_symbol(target, 'local_variable', types[base])
+                    changed = True
             for match in re.finditer(r"\b(?:local\s+)?([A-Za-z_]\w*)\s*=\s*([A-Za-z_]\w*)\.([A-Za-z_]\w*)\b", source):
                 target, base, member = match.groups()
                 base_type = types.get(base)
                 if not base_type:
                     continue
-                result_type = ROBLOX_API_INDEX.member_type(base_type, member)
+                result_type = member if base_type == 'DataModel' and member in ROBLOX_API_INDEX.snapshot()[2] else ROBLOX_API_INDEX.member_type(base_type, member)
                 if result_type and result_type not in {"any", "nil", "Variant"} and types.get(target) != result_type:
                     add_symbol(target, "variable", result_type)
                     changed = True
@@ -4225,11 +4414,12 @@ class CodeEditor(QsciScintilla):
         self._apply_diagnostics(source)
 
     def _apply_semantic_highlighting(self, source):
-        self._clear_indicator(self._FUNCTION_INDICATOR)
+        for indicator in (self._FUNCTION_INDICATOR, 24, 25, 26):
+            self._clear_indicator(indicator)
         if not self._semantic_enabled:
             return
         try:
-            data = source.encode("utf-8")
+            data = masked_code_bytes(source)
         except UnicodeError:
             return
         ranges = set()
@@ -4249,6 +4439,16 @@ class CodeEditor(QsciScintilla):
             ranges.add((start, match.end(1) - start))
         for start, length in sorted(ranges):
             self._fill_indicator(self._FUNCTION_INDICATOR, start, length)
+        for match in re.finditer(rb"(?::|::)\s*([A-Za-z_]\w*)", data):
+            # A colon method call is a function, not a type annotation.
+            if re.match(rb"\s*\(", data[match.end(1):]):
+                continue
+            self._fill_indicator(24, match.start(1), len(match.group(1)))
+        for match in re.finditer(rb"\b(?:continue|export|type)\b", data):
+            self._fill_indicator(26, match.start(), len(match.group()))
+        backticks = [(m.start(), m.end()) for m in NONCODE_PATTERN.finditer(source) if m.group().startswith('`')]
+        for start, end in encoded_spans(source, backticks):
+            self._fill_indicator(25, start, end-start)
 
     @staticmethod
     def _delimiter_diagnostics(data):
@@ -4447,9 +4647,50 @@ class CodeEditor(QsciScintilla):
         prefix = self._completion_popup.prefix
         line, index = self.getCursorPosition()
         start = max(0, index - len(prefix))
-        self.setSelection(line, start, line, index)
-        self.replaceSelectedText(name)
-        self.setCursorPosition(line, start + len(name))
+        suffix = re.match(r"[A-Za-z0-9_]*", self.text(line)[index:]).group()
+        recent = self._recent_source()
+        argument_context = completion_argument_context(recent)
+        snippet = SNIPPETS.get(name) if not argument_context else None
+        replacement = name
+        if argument_context:
+            quote = argument_context['quote']
+            trailing = self.text(line)[index + len(suffix):]
+            if quote:
+                if not trailing.startswith(quote):
+                    replacement += quote
+            else:
+                replacement = '"' + name + '"'
+            # Keep the editor's existing closing quote/parenthesis when present.
+            after_quote = trailing[1:] if quote and trailing.startswith(quote) else trailing
+            if not after_quote.strip() or after_quote.startswith('\n'):
+                replacement += ')'
+
+        if snippet:
+            indent = re.match(r"[ \t]*", self.text(line)).group()
+            replacement = snippet.replace("\n", "\n" + indent)
+        self.beginUndoAction()
+        try:
+            if argument_context:
+                call_start = argument_context['call_start']
+                call_end = argument_context['call_end']
+                typed_call = recent[call_start:call_end]
+                canonical = argument_context['canonical']
+                if typed_call != canonical:
+                    call_line = line - recent[call_start:].count('\n')
+                    call_column = len(recent[:call_start].rsplit('\n', 1)[-1])
+                    self.setSelection(call_line, call_column, call_line, call_column + len(typed_call))
+                    self.replaceSelectedText(canonical)
+            self.setSelection(line, start, line, index + len(suffix))
+            self.replaceSelectedText(replacement)
+        finally:
+            self.endUndoAction()
+        if snippet:
+            lines = replacement.split("\n")
+            blank = next((i for i, value in enumerate(lines) if i and not value.strip()), None)
+            if blank is not None:
+                self.setCursorPosition(line + blank, len(lines[blank]))
+        else:
+            self.setCursorPosition(line, start + len(replacement))
         self._hide_autocomplete()
         self._schedule_analysis()
 
@@ -4552,6 +4793,17 @@ class CodeEditor(QsciScintilla):
             return "Instance"
         if expression in self._symbol_types:
             return self._symbol_types[expression]
+        if expression.startswith("Enum."):
+            return expression
+        service_member = re.fullmatch(r"game\.([A-Za-z_]\w*)", expression)
+        if service_member and service_member.group(1) in ROBLOX_API_INDEX.snapshot()[2]:
+            return service_member.group(1)
+        if expression == 'game.Workspace':
+            return 'Workspace'
+        if expression in ROBLOX_COMMON_SERVICES.split():
+            return expression
+        if expression in {"string", "table"}:
+            return expression
         direct = re.fullmatch(r"game\s*:\s*GetService\s*\(\s*['\"]([A-Za-z_]\w*)['\"]\s*\)", expression)
         if direct:
             return direct.group(1)
@@ -4560,12 +4812,19 @@ class CodeEditor(QsciScintilla):
             return direct.group(1)
         if expression in ROBLOX_VALUE_TYPES.split():
             return expression
+        child_call = re.fullmatch(r"(.+):(?:WaitForChild|FindFirstChild)\s*\(\s*['\"]([A-Za-z_]\w*)['\"]\s*\)", expression)
+        if child_call:
+            parent_type = self._infer_expression_type(child_call.group(1))
+            return ROBLOX_API_INDEX.member_type(parent_type, child_call.group(2)).rstrip('?') or 'Instance'
         if re.fullmatch(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+", expression):
             parts = expression.split(".")
             current = self._infer_expression_type(parts[0])
             if not current:
                 return ""
             for member in parts[1:]:
+                if current == 'DataModel' and member in ROBLOX_API_INDEX.snapshot()[2]:
+                    current = member
+                    continue
                 current = ROBLOX_API_INDEX.member_type(current, member).rstrip("?")
                 if not current:
                     return ""
@@ -4573,16 +4832,43 @@ class CodeEditor(QsciScintilla):
         return ""
 
     def _string_completion_context(self, before):
-        patterns = (
-            (r"game\s*:\s*GetService\s*\(\s*['\"]([^'\"]*)$", "service"),
-            (r"Instance\s*\.\s*new\s*\(\s*['\"]([^'\"]*)$", "class"),
-            (r"(?:IsA|FindFirstChildOfClass|FindFirstChildWhichIsA)\s*\(\s*['\"]([^'\"]*)$", "class"),
-        )
-        for pattern, kind in patterns:
-            match = re.search(pattern, before)
-            if match:
-                return kind, match.group(1)
-        return None
+        context = completion_argument_context(before)
+        return (context['kind'], context['prefix']) if context else None
+
+    def _argument_completion_entries(self, context):
+        class_names, enum_names, services, creatable, _ = ROBLOX_API_INDEX.snapshot()
+        kind = context['kind']
+        if kind == 'service':
+            return [(name, 'service') for name in services]
+        if kind in {'class', 'creatable'}:
+            # IsA accepts abstract/non-creatable classes; Instance.new does not.
+            pool = creatable if kind == 'creatable' else class_names
+            if kind == 'class':
+                pool = pool - set(ROBLOX_VALUE_TYPES.split()) - {'RBXScriptSignal', 'RBXScriptConnection'}
+            return [(name, 'class') for name in pool]
+        leading = context['leading']
+        member = self._member_context(leading)
+        expression = member[0] if member else ''
+        object_type = self._infer_expression_type(expression)
+        entries = set()
+        if kind == 'property':
+            members = ROBLOX_API_INDEX.class_members(object_type or 'Instance')
+            entries.update(name for name, meta in members.items() if meta.get('kind') == 'Property')
+            return [(name, 'property') for name in entries]
+        if kind == 'child':
+            if object_type == 'DataModel' or expression == 'game':
+                entries.update(services)
+            known_children = {'Player': {'PlayerGui','Backpack','PlayerScripts'}, 'Model': {'Humanoid','HumanoidRootPart','Head'}, 'Workspace': {'Terrain','CurrentCamera'}}
+            entries.update(known_children.get(object_type, set()))
+        # Reuse names from this document instead of inventing live game objects.
+        patterns = {
+            'child': r'(?:WaitForChild|FindFirstChild|FindFirstAncestor)\s*\(\s*["\']([^"\']+)',
+            'attribute': r'(?:GetAttribute|SetAttribute|GetAttributeChangedSignal)\s*\(\s*["\']([^"\']+)',
+            'tag': r'(?:AddTag|RemoveTag|HasTag|GetTagged|GetInstanceAddedSignal|GetInstanceRemovedSignal)\s*\(\s*["\']([^"\']+)',
+        }
+        if kind in patterns:
+            entries.update(re.findall(patterns[kind], self.text(), re.I))
+        return [(name, 'field') for name in entries]
 
     @staticmethod
     def _kind_from_member_meta(meta):
@@ -4598,41 +4884,15 @@ class CodeEditor(QsciScintilla):
         return "field"
 
     @staticmethod
-    def _filter_entries(entries, prefix, limit=220):
-        folded = prefix.casefold()
-        unique = {}
-        for name, kind in entries:
-            name = str(name)
-            if not name.casefold().startswith(folded):
-                continue
-            unique.setdefault(name, kind)
-        kind_priority = {
-            "local_variable": 0, "local_function": 0,
-            "variable": 1, "function": 1, "method": 1,
-            "property": 2, "event": 2, "callback": 2,
-            "enum_member": 2, "field": 2,
-            "keyword": 3, "module": 3, "struct": 3, "type": 3,
-            "service": 4, "class": 4, "enum": 4,
-        }
-        ordered = sorted(
-            unique.items(),
-            key=lambda item: (
-                not item[0].startswith(prefix),
-                kind_priority.get(item[1], 6),
-                len(item[0]),
-                item[0].casefold(),
-            ),
-        )
-        return ordered[:limit]
+    def _filter_entries(entries, prefix, limit=300):
+        return rank_entries(entries, prefix, limit)
 
     def _completion_candidates(self, before, allow_empty=False):
         class_names, enum_names, services, creatable, _ = ROBLOX_API_INDEX.snapshot()
-        string_context = self._string_completion_context(before)
-        if string_context:
-            kind, prefix = string_context
-            pool = services if kind == "service" else (creatable or class_names)
-            icon_kind = "service" if kind == "service" else "class"
-            return prefix, self._filter_entries(((name, icon_kind) for name in pool), prefix)
+        argument_context = completion_argument_context(before)
+        if argument_context:
+            prefix = argument_context['prefix']
+            return prefix, self._filter_entries(self._argument_completion_entries(argument_context), prefix)
         member_context = self._member_context(before)
         if member_context:
             expression, separator, prefix = member_context
@@ -4641,24 +4901,38 @@ class CodeEditor(QsciScintilla):
             if expression.startswith("Enum."):
                 enum_name = expression.split(".", 1)[1]
                 return prefix, self._filter_entries(((name, "enum_member") for name in ROBLOX_API_INDEX.enum_items(enum_name)), prefix)
+            inferred_type = self._infer_expression_type(expression)
+            if inferred_type.startswith("Enum."):
+                enum_name = inferred_type.split(".", 1)[1]
+                return prefix, self._filter_entries(((name, "enum_member") for name in ROBLOX_API_INDEX.enum_items(enum_name)), prefix)
             if expression in STATIC_MEMBER_FALLBACKS:
                 entries = []
                 for name, signature in STATIC_MEMBER_FALLBACKS[expression].items():
                     entries.append((name, "function" if "(" in str(signature) else "property"))
                 return prefix, self._filter_entries(entries, prefix)
+            table_entries = self._table_completion_entries(expression)
+            if table_entries:
+                return prefix, self._filter_entries(table_entries, prefix)
             expression_type = self._infer_expression_type(expression)
             if expression_type:
                 members = ROBLOX_API_INDEX.class_members(expression_type, method_only=separator == ":")
                 entries = [(name, self._kind_from_member_meta(meta)) for name, meta in members.items()]
+                if expression_type == 'DataModel' and separator == '.':
+                    entries.extend((name, 'service') for name in services)
+                    entries.append(('Workspace', 'service'))
                 for name, signature in STATIC_MEMBER_FALLBACKS.get(expression_type, {}).items():
                     entries.append((name, "function" if "(" in str(signature) else "property"))
                 return prefix, self._filter_entries(entries, prefix)
-            return prefix, []
+            # Unknown objects still expose the standard Instance API as a fallback.
+            members = ROBLOX_API_INDEX.class_members('Instance', method_only=separator == ':')
+            return prefix, self._filter_entries(((name, self._kind_from_member_meta(meta)) for name, meta in members.items()), prefix)
         prefix = self._identifier_prefix(before)
         if not prefix and not allow_empty:
             return "", []
         entries = []
         entries.extend((name, "keyword") for name in LUAU_KEYWORDS.split())
+        entries.extend((name, "snippet") for name in SNIPPETS)
+        entries.extend((name, "type") for name in LUAU_TYPES.split())
         entries.extend((name, "function" if name in GLOBAL_SIGNATURES else "variable") for name in LUAU_GLOBALS.split())
         entries.extend((name, "module") for name in LUAU_LIBRARIES.split())
         for name in ROBLOX_GLOBALS.split():
@@ -4674,8 +4948,39 @@ class CodeEditor(QsciScintilla):
         entries.extend((name, "service" if name in services else "class") for name in class_names)
         return prefix, self._filter_entries(entries, prefix)
 
+    def _table_completion_entries(self, expression):
+        if not re.fullmatch(r"[A-Za-z_]\w*", expression):
+            return []
+        source = self._recent_source()
+        pattern = r"\blocal\s+" + re.escape(expression) + r"\s*=\s*\{([^{}]*)\}"
+        entries = []
+        for match in re.finditer(pattern, source, re.S):
+            for field in re.finditer(r"(?:^|[,;\n])\s*([A-Za-z_]\w*)\s*=\s*([^,;\n]*)", match.group(1)):
+                entries.append((field.group(1), "function" if field.group(2).lstrip().startswith("function") else "field"))
+        return entries
+
+    def _completion_detail(self, name, kind):
+        if kind == "snippet":
+            return SNIPPETS.get(name, name)
+        line, index = self.getCursorPosition()
+        before = self.text(line)[:index]
+        context = self._member_context(before)
+        if context:
+            expression, separator, prefix = context
+            static = STATIC_MEMBER_FALLBACKS.get(expression, {}).get(name)
+            if not static:
+                static = STATIC_MEMBER_FALLBACKS.get(self._infer_expression_type(expression), {}).get(name)
+            if static:
+                return str(static)
+            signature = ROBLOX_API_INDEX.member_signature(self._infer_expression_type(expression), name)
+            if signature:
+                return signature
+        return GLOBAL_SIGNATURES.get(name, f"{name} · {kind.replace('_', ' ')}")
+
     def _has_editor_focus(self):
         widget = QApplication.focusWidget()
+        if self._find_overlay is not None and self._find_overlay.isVisible() and (widget is self._find_overlay or (widget is not None and self._find_overlay.isAncestorOf(widget))):
+            return False
         return self.hasFocus() or widget is self or (widget is not None and self.isAncestorOf(widget))
 
     def show_autocomplete(self, force=False):
@@ -4686,12 +4991,18 @@ class CodeEditor(QsciScintilla):
             return
         position = int(self.SendScintilla(self.SCI_GETCURRENTPOS))
         source = self.text().encode('utf-8')[:position].decode('utf-8', errors='ignore')
-        if luau_noncode_at_cursor(source):
+        line, index = self.getCursorPosition()
+        before = source
+        argument_context = completion_argument_context(before)
+        if argument_context:
+            # The callee itself must be code, even if its argument is a string.
+            if luau_noncode_at_cursor(source[:argument_context['call_start']]):
+                self._hide_autocomplete()
+                return
+        elif luau_noncode_at_cursor(source):
             self._hide_autocomplete()
             return
         self._refresh_recent_symbols()
-        line, index = self.getCursorPosition()
-        before = self.text(line)[:index]
         prefix, candidates = self._completion_candidates(before, allow_empty=force)
         contextual = self._member_context(before) is not None or self._string_completion_context(before) is not None
         if not candidates or (not force and not prefix and not contextual):
@@ -4807,6 +5118,18 @@ class CodeEditor(QsciScintilla):
         return True
 
     def keyPressEvent(self, event):
+        if event.modifiers() == Qt.KeyboardModifier.ControlModifier and event.key() == Qt.Key.Key_H:
+            self.show_find()
+            self._find_overlay.replacement.setFocus()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_F3:
+            if self._find_overlay is None or not self._find_overlay.isVisible():
+                self.show_find()
+            else:
+                self._find_overlay.search(not bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+            event.accept()
+            return
         if event.matches(QKeySequence.StandardKey.Find):
             self.show_find()
             event.accept()
@@ -4819,6 +5142,11 @@ class CodeEditor(QsciScintilla):
             self._queue_autocomplete(force=True)
             event.accept()
             return
+        if event.key() == Qt.Key.Key_Tab and not self._autocomplete_active() and not self.hasSelectedText() and event.modifiers() == Qt.KeyboardModifier.NoModifier:
+            line, index = self.getCursorPosition()
+            before = self.text(line)[:index]
+            if self._identifier_prefix(before) or self._member_context(before) or completion_argument_context(self._recent_source()):
+                self.show_autocomplete(force=True)
         if event.key() == Qt.Key.Key_Tab and self._completion_timer.isActive():
             
             
@@ -4859,10 +5187,12 @@ class CodeEditor(QsciScintilla):
         super().keyPressEvent(event)
         if text in self._PAIR_OPEN:
             self._insert_pair_after(text)
-        if text and (text[-1:].isalnum() or text in "_.:\"'"):
+        if text and (text[-1:].isalnum() or text in "_.:(\"'"):
             self._queue_autocomplete()
-        elif event.key() == Qt.Key.Key_Backspace:
-            self._queue_autocomplete()
+        elif event.key() in (Qt.Key.Key_Backspace, Qt.Key.Key_Left, Qt.Key.Key_Right):
+            before = self._recent_source()
+            if event.key() == Qt.Key.Key_Backspace or completion_argument_context(before) or self._member_context(before):
+                self._queue_autocomplete()
         elif text == " ":
             line, index = self.getCursorPosition()
             before = self.text(line)[:index].rstrip()
@@ -4872,6 +5202,11 @@ class CodeEditor(QsciScintilla):
     def mousePressEvent(self, event):
         self._hide_autocomplete()
         super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if not self.hasSelectedText() and completion_argument_context(self._recent_source()):
+            self._queue_autocomplete()
 
     def wheelEvent(self, event):
         self._hide_autocomplete()
@@ -8186,9 +8521,9 @@ class AppearanceManager(QObject):
                 syntax_config("syntax_string", "#a8c77a"): (lexer.String, lexer.Character, lexer.LiteralString, lexer.UnclosedString),
                 syntax_config("syntax_number", "#c9a56f"): (lexer.Number,),
                 syntax_config("syntax_operator", "#d7dadd"): (lexer.Operator,),
-                syntax_config("syntax_builtin", "#7db0d5"): (lexer.BasicFunctions, lexer.KeywordSet5, lexer.KeywordSet6, lexer.KeywordSet7),
+                syntax_config("syntax_builtin", "#7db0d5"): (lexer.BasicFunctions, lexer.KeywordSet5, lexer.KeywordSet7),
                 syntax_config("syntax_function", "#7daee0"): (lexer.StringTableMathsFunctions, lexer.CoroutinesIOSystemFacilities),
-                syntax_config("syntax_type", "#b5a0d2"): (lexer.KeywordSet8,),
+                syntax_config("syntax_type", "#b5a0d2"): (lexer.KeywordSet6, lexer.KeywordSet8),
             }
             editor_bg = ui_config("editor", "background", "#121416")
             editor_text = ui_config("editor", "text", "#f1f2f2")
@@ -8344,8 +8679,8 @@ QMessageBox {{ background: {t['window_bg']}; color: {t['text']}; }}
             editor._lel_syntax_styles = {
                 self.color("syntax_comment", "#7f936f"): (lexer.Comment, lexer.LineComment), self.color("syntax_keyword", "#86a8e7"): (lexer.Keyword,),
                 self.color("syntax_string", "#a8c77a"): (lexer.String, lexer.Character, lexer.LiteralString, lexer.UnclosedString), self.color("syntax_number", "#c9a56f"): (lexer.Number,),
-                self.color("syntax_operator", "#d7dadd"): (lexer.Operator,), self.color("syntax_builtin", "#7db0d5"): (lexer.BasicFunctions, lexer.KeywordSet5, lexer.KeywordSet6, lexer.KeywordSet7),
-                self.color("syntax_function", "#7daee0"): (lexer.StringTableMathsFunctions, lexer.CoroutinesIOSystemFacilities), self.color("syntax_type", "#b5a0d2"): (lexer.KeywordSet8,),
+                self.color("syntax_operator", "#d7dadd"): (lexer.Operator,), self.color("syntax_builtin", "#7db0d5"): (lexer.BasicFunctions, lexer.KeywordSet5, lexer.KeywordSet7),
+                self.color("syntax_function", "#7daee0"): (lexer.StringTableMathsFunctions, lexer.CoroutinesIOSystemFacilities), self.color("syntax_type", "#b5a0d2"): (lexer.KeywordSet6, lexer.KeywordSet8),
             }
             editor.setColor(QColor(self.color("editor_text", "#ffffff"))); editor.setPaper(QColor(self.color("editor_bg", "#08080a")))
             editor.setCaretForegroundColor(QColor(self.color("caret", "#ffffff"))); editor.setSelectionBackgroundColor(QColor(self.color("editor_selection", "#2b2b2b"))); editor.setSelectionForegroundColor(QColor(self.color("editor_text", "#ffffff")))
@@ -8660,279 +8995,96 @@ strong { color:#f3f3f5; } li { margin:3px 0; } .note { border-left:3px solid #3a
 """
 DOCUMENTATION_HTML = r"""
 <style>
-body { color: #d4d4d4; font-family: 'Segoe UI'; font-size: 10.5pt; line-height: 1.55; background: #0b0c0d; margin: 0; }
-h1 { color: #ffffff; font-size: 19pt; margin: 2px 0 6px 0; }
-h2 { color: #f2f2f2; font-size: 13pt; margin: 26px 0 8px 0; }
-h3 { color: #e7e7e7; font-size: 11pt; margin: 17px 0 6px 0; }
-p { margin: 5px 0 10px 0; }
-ul, ol { margin: 7px 0 12px 22px; }
-li { margin: 4px 0; }
-code { color: #9fe8aa; background: #0d0d0d; }
-pre { color: #d8d8d8; background: #0a0a0a; border: 1px solid #1f1f1f; padding: 11px; }
-a { color: #8fcfff; text-decoration: none; }
-.note { color: #c5c5c5; background: #0a0a0a; border-left: 3px solid #383838; padding: 9px 11px; }
-.kbd { color: #eeeeee; background: #151515; border: 1px solid #2d2d2d; }
+body {font-family:'Segoe UI'; font-size:10.5pt; color:#dce2ec; background:#0b0c0d; line-height:1.55;}
+h1 {font-size:22pt; color:#fff;} h2 {font-size:15pt; color:#b7d5ff; margin-top:25px;} h3 {color:#ede6ff; margin-top:18px;}
+p,li {margin-bottom:8px;} code,pre {font-family:Consolas; color:#b9df9d;} pre {background:#141820; padding:12px; white-space:pre-wrap;}
+a {color:#91caff;} table {border-collapse:collapse; width:100%;} td,th {padding:8px; border:1px solid #343b47; text-align:left;} th {background:#202735; color:white;}
 </style>
-
-<h1>LelSploit Documentation</h1>
-<p>A practical guide to writing, organizing, loading, and running Luau scripts with LelSploit.</p>
-
-<p><b>Contents:</b>
-<a href="#start">Getting started</a> ·
-<a href="#editor">Editor</a> ·
-<a href="#luau">Luau basics</a> ·
-<a href="#run">Running scripts</a> ·
-<a href="#tabs">Tabs & files</a> ·
-<a href="#scriptblox">ScriptBlox</a> ·
-<a href="#tools">Tools</a> ·
-<a href="#fastflags">FastFlags</a> ·
-<a href="#shortcuts">Shortcuts</a> ·
-<a href="#troubleshooting">Troubleshooting</a>
-</p>
-
-<h2 id="start">Getting started</h2>
-<ol>
-<li>Start Roblox and join the experience you want to work with.</li>
-<li>Open LelSploit. The first editor tab contains a small <code>print</code> example.</li>
-<li>Press <b>Attach</b> to connect the configured local API bridge to the running Roblox client.</li>
-<li>Write or paste Luau in the active tab.</li>
-<li>Press <b>Execute</b> to send the active tab through the local bridge.</li>
-</ol>
-<p class="note"><b>Local execution:</b> LelSploit sends the active script through its configured local API bridge. Script text is handled on your machine and is sent to the locally attached client context. The editor itself does not require a cloud service to store or execute your current tab.</p>
-
-<h2 id="editor">The code editor</h2>
-<p>The main editor is optimized for Lua/Luau source. Syntax colors distinguish comments, strings, numbers, operators, keywords, built-in functions, and Luau-specific types.</p>
-<h3>Useful editor habits</h3>
-<ul>
-<li>Keep one feature or experiment per tab. Smaller scripts are easier to test and debug.</li>
-<li>Use descriptive tab names such as <code>movement.luau</code>, <code>ui-test.luau</code>, or <code>network-debug.luau</code>.</li>
-<li>Use comments beginning with <code>--</code> to explain assumptions and temporary tests.</li>
-<li>Prefer local variables for values that do not need to be global.</li>
-<li>When a script becomes large, split helpers into logical sections and keep related functions together.</li>
-</ul>
-
-<h2 id="luau">Luau basics</h2>
-<h3>Output</h3>
-<pre>print("Hello from LelSploit")
-warn("This is a warning")</pre>
-<h3>Variables</h3>
-<pre>local playerName = "Player"
-local speed = 16
-local enabled = true</pre>
-<h3>Functions</h3>
-<pre>local function greet(name)
-    print("Hello, " .. name)
+<h1>LelSploit help</h1>
+<p><b>Start with a task.</b> Pick a section on the left, or search by what you want to do: “replace”, “autocomplete”, “install extension”, or “build macro”. Search covers all three documentation tabs.</p>
+<h2 id="start">Quick start: edit your first script</h2>
+<ol><li>Open the app. The selected tab is your current code file.</li><li>Type <code>print("Hello, World!")</code>. Strings, numbers, functions, and keywords have different colors.</li><li>Use the save icon above the editor to save a copy as a <code>.luau</code> or <code>.lua</code> file.</li><li>To work on another script, use the plus button next to the tabs. Switch tabs to return to your first script.</li></ol>
+<p><b>Editing does not require a running Roblox session.</b> Running a script depends on the configured bridge and its available environment.</p>
+<h2 id="editor">Autocomplete: get useful suggestions</h2>
+<p>Start typing a name. Suggestions include Luau keywords, standard libraries, Roblox types, services, class members, enums, and names declared in your file. Prefix matches come first; capital initials and partial names also work.</p>
+<table><tr><th>Try typing</th><th>What appears</th></tr><tr><td><code>math.</code></td><td>Math functions such as abs, clamp, floor, and random.</td></tr><tr><td><code>game:GetService("Pla</code></td><td>Service names such as Players, including inside quotes.</td></tr><tr><td><code>Instance.new("Text</code></td><td>Class names such as TextLabel and TextButton.</td></tr><tr><td><code>Enum.KeyCode.</code></td><td>Enum values such as Space, Return, and A.</td></tr><tr><td><code>local part = Instance.new("Part")</code>, then <code>part.</code></td><td>Part properties and inherited members.</td></tr><tr><td><code>part:</code></td><td>Methods you can call on that object.</td></tr></table>
+<p><b>Choose a suggestion:</b> Up/Down moves through the list. Tab or Enter inserts it. Escape dismisses it. Ctrl+Space opens suggestions manually. Suggestions are static editing help; they do not inspect a live game.</p>
+<h3>Snippets: insert a whole block</h3>
+<p>Type a snippet name and choose it from the suggestions. The editor inserts an indented block and puts the caret on its first blank body line when there is one. Replace example names such as <code>condition</code> or <code>items</code> with your own.</p>
+<table><tr><th>Snippet</th><th>Creates</th></tr><tr><td>if_block / if_else</td><td>A condition with an optional else branch.</td></tr><tr><td>for_pairs / for_ipairs / for_range</td><td>A dictionary, array, or counting loop.</td></tr><tr><td>local_function / function_block</td><td>A reusable function.</td></tr><tr><td>connect_event</td><td>An event connection with a callback.</td></tr><tr><td>protected_call</td><td>A pcall block with error handling.</td></tr><tr><td>task_spawn / task_delay</td><td>A scheduled function.</td></tr><tr><td>type_alias</td><td>A Luau table type declaration.</td></tr></table>
+<h3>Complete class names, services, properties, and spelling</h3>
+<p>Inside <code>object:IsA("")</code>, click between the quotes or start typing to see class names, including abstract classes such as BasePart. <code>Instance.new("")</code> uses a separate list of constructible classes.</p>
+<p>Type <code>game.</code> for services and members, or <code>game:GetService(</code> for service alternatives. Tab inserts the selected name and adds required quotes. Existing quotes and parentheses are reused. This also works when the argument starts on the next line.</p>
+<p>Property-name arguments such as <code>part:GetPropertyChangedSignal("")</code> show the inferred object's properties. Child, attribute, and tag calls can reuse names found in this file. These suggestions do not inspect a live game.</p>
+<p>Close spelling matches appear after prefix, capital-initial, and substring matches. For example, type <code>game:GetServcie</code> and press Tab to accept <code>GetService</code>. Corrections only apply when you accept a suggestion; Escape leaves your text unchanged.</p>
+<h3>When suggestions seem incomplete</h3>
+<p>Give a variable a type, for example <code>local part: Part</code>, or assign it with <code>Instance.new("Part")</code>. Member suggestions use simple local type inference. Dynamically generated tables and complex expressions may need explicit types. Common APIs are included offline; the existing background API loader can add more when its source is reachable.</p>
+<h2 id="find">Find text: Ctrl+F</h2>
+<ol><li>Press Ctrl+F in the code window. If you selected a short piece of text, it fills the search field.</li><li>Type a word or phrase. All occurrences receive an amber highlight, and the current one has a stronger highlight.</li><li>Read the counter: <b>2 / 8</b> means the second of eight matches.</li><li>Press Enter or F3 for the next match. Press Shift+Enter or Shift+F3 for the previous one. Search wraps at the beginning/end.</li><li>Press Escape to close search and return to editing.</li></ol>
+<p>Search ignores letter case, treats punctuation literally, and searches the current tab. The compact panel has a find field, match count, navigation buttons, and a replacement field with icon buttons.</p>
+<h2 id="replace">Replace one match or every match</h2>
+<ol><li>Press Ctrl+H, or open Ctrl+F and use the second field.</li><li>Enter the text to find and the replacement.</li><li>Choose <b>Replace</b> to change the current match and move to the next. Enter in the replacement field does the same.</li><li>Choose <b>Replace all</b> to change every matching occurrence in the current file, ignoring letter case.</li></ol>
+<p><b>Undo:</b> Ctrl+Z undoes Replace All as one action. An empty replacement removes matches. Replacement text is inserted literally, including backslashes. Check the match count before replacing everything.</p>
+<h2 id="syntax">Syntax colors and editing help</h2>
+<p>Keywords, strings, comments, numbers, functions, builtins, and types use separate colors. Function calls inside strings and comments stay in their string/comment colors. Luau type annotations and backtick strings also receive highlighting.</p>
+<p>Change colors using the app's syntax settings. Turning syntax colors off also disables semantic color overlays. Underlines indicate simple delimiter checks, not a full Luau compiler; a highlighted issue may need review in context.</p>
+<h2 id="luau">Luau basics with small examples</h2>
+<h3>Store values and call a function</h3>
+<pre>local playerName: string = "Alex"
+local score = 10
+print(playerName, score)</pre>
+<p><code>local</code> creates a variable. A type after a colon documents the value expected there. Parentheses call a function; commas separate arguments.</p>
+<h3>Conditions and loops</h3>
+<pre>if score &gt;= 10 then
+    print("Goal reached")
 end
 
-greet("Player")</pre>
-<h3>Tables</h3>
-<pre>local settings = {
-    Enabled = true,
-    Speed = 16,
-    Modes = {"Normal", "Fast"}
-}
-
-print(settings.Speed)</pre>
-<h3>Conditionals</h3>
-<pre>local value = 10
-
-if value > 5 then
-    print("value is greater than 5")
-else
-    print("value is 5 or lower")
+for index, value in ipairs({"red", "green", "blue"}) do
+    print(index, value)
 end</pre>
-<h3>Loops</h3>
-<pre>for index = 1, 5 do
-    print(index)
-end
-
-local items = {"A", "B", "C"}
-for index, item in ipairs(items) do
-    print(index, item)
-end</pre>
-<h3>Roblox objects</h3>
+<p>Close blocks with <code>end</code>. Use <code>==</code> to compare values and <code>=</code> to assign one. <code>--</code> starts a comment.</p>
+<h3>Roblox objects and services</h3>
 <pre>local Players = game:GetService("Players")
 local player = Players.LocalPlayer
-
-print(player and player.Name)</pre>
-<p>Roblox APIs and available objects depend on the client context and the script environment provided by the attached bridge. Test assumptions before building larger scripts around them.</p>
-
-<h2 id="run">Execute, Attach, and Roblox controls</h2>
-<h3>Execute</h3>
-<p><b>Execute</b> sends only the currently selected editor tab. If there is no open tab, there is nothing to execute.</p>
-<h3>Attach / Reattach</h3>
-<p><b>Attach</b> asks the local bridge to connect to Roblox. After a successful connection the button becomes <b>Reattach</b>. Reattach is useful after a client transition, reconnect, or when the bridge no longer reports an attached state.</p>
-<h3>Start Roblox / End Roblox</h3>
-<p>The Roblox button reflects whether a supported Roblox player process is detected. Ending Roblox also cancels an attach attempt that is still waiting for a client.</p>
-<h3>Roblox not detected</h3>
-<p>If you Execute or Attach while no Roblox Player is detected, LelSploit asks whether you want to continue. Continuing lets the local bridge attempt its normal behavior; cancelling returns you to the editor.</p>
-
+if player then
+    print(player.DisplayName)
+end</pre>
+<p>A dot reads a property. A colon calls an object's method. Available objects depend on the script environment; for example, LocalPlayer is a client-context value.</p>
 <h2 id="tabs">Tabs and files</h2>
-<ul>
-<li>Use the <b>+</b> control beside the right-most tab to create a new script.</li>
-<li>Hover a tab to reveal its close icon.</li>
-<li>Right-click a tab to close it immediately.</li>
-<li>Double-click a tab, or press <b>F2</b>, to rename the current script.</li>
-<li>The source extension remains protected while renaming.</li>
-<li>You can close every tab. Creating a new tab after all tabs are closed starts again at <code>script1.luau</code>.</li>
-<li>When many tabs are open, use the mouse wheel over the tab strip to move through them.</li>
-</ul>
-<h3>Open and save</h3>
-<p>Use the Open and Save icons at the top-right of the code window. Open accepts <code>.luau</code>, <code>.lua</code>, <code>.txt</code>, <code>.script</code>, and extensionless files. Save asks where to save the current tab and remembers the last directory you used.</p>
+<p>The active tab is the file you are editing and searching. Use the plus button for a new tab, the open icon for a file, and the save icon to save a copy. Tab close and rename controls manage individual files. Save your work before replacing application files or closing the app.</p>
+<h2 id="run">Attach and execute</h2>
+<ol><li>Start Roblox using the app or open it yourself.</li><li>Join the desired experience.</li><li>Use Attach and wait for the app's status to confirm readiness.</li><li>Select the script tab, then choose Execute.</li></ol>
+<p>Execution requires the separate bridge used by this installation. API support and runtime errors depend on that bridge. Editor suggestions are not a guarantee that a function is available at runtime.</p>
+<h2 id="scriptblox">ScriptBlox and LelHub</h2>
+<p><b>ScriptBlox</b> opens the script browser. Search for a script, inspect it, and use the available load/install controls to put it into the editor. Settings determine whether installation loads or runs it.</p>
+<p><b>LelHub</b> is the icon immediately left of Extensions. It opens its loader in a new tab and uses the existing execution action. It requires the configured runtime and a reachable loader URL.</p>
+<h2 id="extensions">Extensions: where to start</h2>
+<p>Use the Extensions button to browse installed packages and their controls. Open the <b>Extensions</b> documentation tab for installation help, the manifest format, permissions, and operation reference. Search by an operation name such as <code>editor</code> or <code>ui.toolbar</code> to jump to its section.</p>
+<h2 id="macros">Macros: where to start</h2>
+<p>Use the Macros button to create or run an automation. A macro is a sequence of saved actions. Open the <b>Macros</b> documentation tab for recording, editing actions, triggers, loops, and troubleshooting. Test short sequences before adding more steps.</p>
+<h2 id="tools">Tools and FastFlags</h2>
+<p><b>Tools</b> groups the installed utility actions. Check a tool's description and output to understand its result. Deobfuscation results depend on the input and are not guaranteed to recover original source.</p>
+<p><b>FastFlags</b> manages client settings and related modifications. Pages include flags, assets, username, and custom settings. Changes may require Roblox to restart and can depend on the installed client. Use the available restore controls if a modification gives an unwanted result.</p>
+<h2 id="updates">Check for and install updates</h2>
+<p>Open Settings → Updates. <b>Get newest updates when available</b> checks GitHub at startup and every hour; turn it off to check manually. <b>Check for updates</b> checks now, and <b>View update</b> reopens a pending update.</p>
+<p>Only stable tags in the form <code>v1.2.3</code> qualify. Beta tags, prereleases, and drafts do not prompt you. Select <b>Update now</b> to download; <b>Later</b> leaves it available in Settings.</p>
+<p>The updater checks the current-user and all-users Start Menu Programs locations. A LelSploit folder or shortcut selects the release's <code>.msi</code> asset; otherwise it selects the <code>.exe</code> asset. The filename itself may vary. When the download opens successfully, LelSploit exits fully, including when close-to-tray is enabled.</p>
+<p>A failed check or download keeps LelSploit open and shows a retry message. Windows may show its normal installer/elevation prompt. Updates use the release assets published for this project.</p>
+<h2 id="shortcuts">Keyboard shortcut reference</h2>
+<table><tr><th>Shortcut</th><th>Action</th></tr><tr><td>Ctrl+F</td><td>Find in the current editor tab.</td></tr><tr><td>Ctrl+H</td><td>Focus the replacement field.</td></tr><tr><td>Enter / F3</td><td>Next match while searching.</td></tr><tr><td>Shift+Enter / Shift+F3</td><td>Previous match while searching.</td></tr><tr><td>Enter in Replace</td><td>Replace current match, then advance.</td></tr><tr><td>Escape</td><td>Close search or dismiss autocomplete.</td></tr><tr><td>Ctrl+Space</td><td>Request autocomplete.</td></tr><tr><td>Up / Down, then Tab or Enter</td><td>Choose and insert an autocomplete entry.</td></tr><tr><td>Ctrl+Z / Ctrl+Y</td><td>Undo / redo.</td></tr><tr><td>Ctrl+A / Ctrl+C / Ctrl+V</td><td>Select all / copy / paste.</td></tr><tr><td>Ctrl+F in Documentation</td><td>Focus search across the help sections.</td></tr></table>
+<h2 id="troubleshooting">Troubleshooting by symptom</h2>
+<table><tr><th>Problem</th><th>Try this</th></tr><tr><td>No search results</td><td>Check the active tab and spelling. Search is literal and ignores letter case.</td></tr><tr><td>Enter inserts a newline</td><td>Open Ctrl+F and keep the search field focused. While the bar is open, Enter navigates matches.</td></tr><tr><td>Replace changed too much</td><td>Press Ctrl+Z immediately, then use a more specific search phrase.</td></tr><tr><td>No member suggestions</td><td>Add a simple local type annotation, or assign a known constructor/service before using the variable.</td></tr><tr><td>Popup hides code</td><td>Press Escape to dismiss it, then Ctrl+Space when needed.</td></tr><tr><td>Colors look wrong</td><td>Check whether syntax coloring is enabled and review the syntax color settings.</td></tr><tr><td>Execute fails</td><td>Confirm Roblox is running, Attach succeeded, and the script uses APIs supported by the configured bridge.</td></tr><tr><td>An extension is confusing</td><td>Search its operation or field name in the Extensions documentation tab; review required permissions and validation messages.</td></tr></table>
 
-<h2 id="scriptblox">ScriptBlox</h2>
-<p>ScriptBlox provides a searchable script catalog inside LelSploit.</p>
-<ul>
-<li><b>Search scripts</b> filters by script terms.</li>
-<li><b>Search games or place ID</b> narrows results to a game or numeric place identifier.</li>
-<li><b>Keyless</b> is green while enabled.</li>
-<li><b>Load More</b> appears at the bottom only when the API reports another page.</li>
-<li><b>Install</b> follows your configured install behavior.</li>
-<li>The star button saves or removes a script from your local Saved Scripts library.</li>
-</ul>
-<h3>Install behavior</h3>
-<p>Settings lets you choose whether Install should use the current tab, create a new tab, execute immediately, or ask on the first install. <b>Put in new code window & run</b> keeps the installed source separate from your current work and is the recommended automatic mode.</p>
-<h3>Saved Scripts</h3>
-<p>Saved Scripts keeps favorites in <code>saved_scripts.json</code>. Entering Saved Scripts temporarily removes the normal browse filters; when you return, the previous search text, game/place filter, sorting, and Keyless state are restored.</p>
-
-<h2 id="tools">Tools</h2>
-<h3>Loadstring Reverser</h3>
-<p>Paste a script containing an HTTP loadstring. LelSploit extracts the URL and retrieves the text response so you can inspect the source before using it.</p>
-<pre>loadstring(game:HttpGet("https://example.com/script.lua"))()</pre>
-<p>Large responses are streamed into the output field in chunks to avoid unnecessarily building one huge text value at once.</p>
-<h3>Loadstring Creator</h3>
-<p>Paste any valid HTTP or HTTPS raw URL and LelSploit creates the common HttpGet loadstring form:</p>
-<pre>loadstring(game:HttpGet("https://example.com/raw-script.lua"))()</pre>
-<h3>GitHub Rawifier</h3>
-<p>Converts a normal GitHub <code>/blob/</code> URL into a <code>raw.githubusercontent.com</code> URL suitable for retrieving the file contents directly.</p>
-
-<h2 id="fastflags">FastFlags and client modifications</h2>
-<p>The FastFlags window contains four pages: FastFlags, Assets, Username, and Custom. FastFlag management is off by default. When enabled, LelSploit stores the selected flags in <code>fastflags.json</code> and synchronizes them into the current Roblox version's <code>ClientSettings/ClientAppSettings.json</code>.</p>
-<ul>
-<li>Rendering mode, MSAA, display scaling, Alt+Enter fullscreen, texture quality, mesh LOD, FRM quality, grey sky, voxelizer pause, grass distances/motion, and the Roblox framerate cap can be configured.</li>
-<li>The Assets page manages a custom font, sounds, skyboxes, textures, and default R6 avatar meshes. Sources can be local files, HTTP/HTTPS URLs, public asset IDs, or <code>remove</code>.</li>
-<li>The Username page stores and applies client-side username/verified/creator overrides through the local execution bridge.</li>
-<li>The Custom page maps any relative Roblox resource path to a replacement source and keeps an original-file backup for reset.</li>
-<li>Saved resource modifications are reapplied when LelSploit detects a new Roblox version folder.</li>
-</ul>
-<p>Preset changes that need a fresh client show the restart notice. Custom FastFlags are supplied through the live ClientSettings path while Roblox is running.</p>
-
-<h2>Settings</h2>
-<h3>Tab names</h3>
-<p>The <b>Show .luau in tab names</b> option controls whether the source extension is displayed in the tab strip. It does not change the actual source filename logic.</p>
-<h3>Close behavior and system tray</h3>
-<p>Settings can choose whether closing LelSploit exits completely or keeps it running in the system tray. When tray mode is enabled, clicking the tray icon restores the existing editor session and the tray menu provides quick access to execution, Roblox controls, ScriptBlox, Tools, FastFlags/client mods, Extensions, Documentation, Settings, and Exit.</p>
-<h3>Danger Zone</h3>
-<p><b>Erase Data</b> removes the local contents of <code>workspace</code>, <code>logs</code>, and <code>autoexec</code>, together with LelSploit's local settings, FastFlags, saved scripts, and client-modification data. LelSploit asks for confirmation first.</p>
-
-<h2 id="shortcuts">Keyboard shortcuts</h2>
-<ul>
-<li><b>Ctrl + Enter</b> — Execute the current tab.</li>
-<li><b>Ctrl + O</b> — Open a script file.</li>
-<li><b>Ctrl + S</b> — Save the current tab.</li>
-<li><b>Ctrl + Shift + S</b> — Save the current tab as a new file.</li>
-<li><b>F2</b> — Rename the current tab.</li>
-</ul>
-
-<h2>Organizing larger scripts</h2>
-<p>A useful structure for a larger Luau script is:</p>
-<pre>-- Services
-local Players = game:GetService("Players")
-
--- State
-local enabled = true
-
--- Helpers
-local function log(message)
-    print("[MyScript]", message)
-end
-
--- Main behavior
-local function start()
-    if not enabled then
-        return
-    end
-    log("Started")
-end
-
-start()</pre>
-<ul>
-<li>Resolve services once near the top.</li>
-<li>Keep configuration/state together.</li>
-<li>Put reusable logic in small functions.</li>
-<li>Give functions names that describe what they do.</li>
-<li>Return early when a required condition is missing.</li>
-<li>Use clear output messages while testing.</li>
-</ul>
-
-<h2>Working with remote source</h2>
-<p>Before running code loaded from a URL, inspect the response when possible. Remote content can change independently of the loadstring that points to it. The Loadstring Reverser exists specifically to make inspection easier.</p>
-<p>For your own projects, raw GitHub links are convenient because the script remains readable in a normal repository while the raw URL can be consumed directly.</p>
-
-<h2>Performance tips</h2>
-<ul>
-<li>Avoid extremely long single lines; they are expensive for code editors to lay out.</li>
-<li>LelSploit may pause syntax colors for very large files or unusually long lines.</li>
-<li>Large file loads and large remote responses are processed incrementally where practical.</li>
-<li>Split unrelated experiments into separate tabs instead of growing one permanent scratch file.</li>
-</ul>
-
-<h2 id="troubleshooting">Troubleshooting</h2>
-<h3>Attach waits for a long time</h3>
-<ul>
-<li>Confirm Roblox Player is running.</li>
-<li>Wait until the client has fully opened before attaching.</li>
-<li>If Roblox was closed during attach, start it again and retry.</li>
-<li>Use Reattach after a client restart.</li>
-</ul>
-<h3>Execute does not produce the expected result</h3>
-<ul>
-<li>Confirm the correct tab is selected.</li>
-<li>Verify the script itself has no syntax or runtime error.</li>
-<li>Check that the APIs used by the script are available in the attached environment.</li>
-</ul>
-<h3>A remote script does not load</h3>
-<ul>
-<li>Make sure the URL is HTTP or HTTPS.</li>
-<li>Use a raw file URL rather than a normal webpage when appropriate.</li>
-<li>Try the Loadstring Reverser to inspect the returned response.</li>
-<li>For GitHub files, use GitHub Rawifier on a <code>/blob/</code> URL.</li>
-</ul>
-<h3>FastFlags did not apply</h3>
-<ul>
-<li>Confirm FastFlag management is enabled.</li>
-<li>Save the changes.</li>
-<li>Restart Roblox when LelSploit says a restart is required.</li>
-<li>Remember that the current Roblox client may no longer honor a particular flag.</li>
-</ul>
-
-<h2>Local files used by LelSploit</h2>
-<ul>
-<li><code>settings.json</code> — interface and behavior preferences.</li>
-<li><code>fastflags.json</code> — saved FastFlag configuration.</li>
-<li><code>saved_scripts.json</code> — ScriptBlox favorites and cached saved-script information.</li>
-<li><code>icons/</code> — interface icons.</li>
-<li><code>libls.dll</code> and dependency DLLs — local API runtime files stored beside LelSploit.</li>
-</ul>
-
-<h2>Final workflow</h2>
-<ol>
-<li>Start Roblox.</li>
-<li>Attach.</li>
-<li>Create or open a tab.</li>
-<li>Write and review the Luau source.</li>
-<li>Save anything you want to keep.</li>
-<li>Execute the active tab.</li>
-</ol>
 """
 
 from lelsploit_extension_docs import EXTENSIONS_DOCUMENTATION_HTML
+EXTENSIONS_DOCUMENTATION_HTML = EXTENSION_START_GUIDE + EXTENSIONS_DOCUMENTATION_HTML
 
 class DocumentationWindow(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
         self.setWindowTitle("Documentation")
-        self.resize(850, 700)
+        self.resize(1080, 760)
         self.setMinimumSize(640, 470)
         apply_window_icon(self)
 
@@ -8944,7 +9096,7 @@ class DocumentationWindow(QDialog):
 
         self.browser = self._make_browser(DOCUMENTATION_HTML)
         self.extension_browser = self._make_browser(EXTENSIONS_DOCUMENTATION_HTML)
-        self.macro_browser = self._make_browser(_lelsploit_macros.MACRO_DOCUMENTATION_HTML)
+        self.macro_browser = self._make_browser(MACRO_START_GUIDE + _lelsploit_macros.MACRO_DOCUMENTATION_HTML)
         main_icon = lelsploit_icon()
         if not main_icon.isNull():
             self.tabs.addTab(self.browser, main_icon, "LelSploit")
@@ -8961,10 +9113,17 @@ class DocumentationWindow(QDialog):
             self.tabs.addTab(self.macro_browser, macro_icon, "Macros")
         else:
             self.tabs.addTab(self.macro_browser, "Macros")
-        layout.addWidget(self.tabs, 1)
+        self._build_navigation(layout)
 
         self.setStyleSheet("""
             QDialog { background: #08090a; color: #d7d7d7; }
+            QLineEdit#helpSearch { background:#141820; color:#f0f3fa; border:1px solid #485467; border-radius:5px; padding:8px; }
+            QLabel#helpCount { color:#aeb9cb; padding:5px 0; }
+            QListWidget#helpTopics { background:#10141b; color:#cbd7e8; border:1px solid #2d3542; border-radius:4px; padding:4px; outline:0; }
+            QListWidget#helpTopics::item { padding:7px 5px; border-bottom:1px solid #232a35; }
+            QListWidget#helpTopics::item:selected { background:#2b415f; color:#ffffff; }
+            QListWidget#helpTopics::item:hover { background:#1d2b3e; }
+            QSplitter::handle { background:#2d3542; width:4px; }
             QTabWidget#documentationTabs { background: transparent; }
             QTabWidget#documentationTabs::pane { border: none; background: #0b0c0d; top: -1px; }
             QTabWidget#documentationTabs QTabBar { background: transparent; }
@@ -8987,6 +9146,108 @@ class DocumentationWindow(QDialog):
             QTextBrowser#documentationBrowser QScrollBar::sub-line:vertical { height: 0; }
         """)
         apply_blur_style(self)
+
+    def _build_navigation(self, layout):
+        self._doc_sections = []
+        self._doc_browsers = (self.browser, self.extension_browser, self.macro_browser)
+        sources = (DOCUMENTATION_HTML, EXTENSIONS_DOCUMENTATION_HTML, MACRO_START_GUIDE + _lelsploit_macros.MACRO_DOCUMENTATION_HTML)
+        for tab, (browser, source) in enumerate(zip(self._doc_browsers, sources)):
+            markup, sections = document_sections(source)
+            browser.setHtml(markup)
+            browser.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            for section in sections:
+                self._doc_sections.append({**section, 'tab':tab})
+        self.help_search = SearchLineEdit()
+        self.help_search.setObjectName("helpSearch")
+        self.help_search.setPlaceholderText('Search all help: editor, replace, permissions, macro…')
+        self.help_search.setClearButtonEnabled(True)
+        self.help_search.setAccessibleName('Search all documentation')
+        self.help_search.textChanged.connect(self._filter_help)
+        self.help_search.returnPressed.connect(self._next_help_result)
+        layout.addWidget(self.help_search)
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        side = QWidget()
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(0, 0, 6, 0)
+        self.help_count = QLabel()
+        self.help_count.setObjectName("helpCount")
+        side_layout.addWidget(self.help_count)
+        self.help_topics = QListWidget()
+        self.help_topics.setObjectName("helpTopics")
+        self.help_topics.setAccessibleName('Help sections and search results')
+        self.help_topics.setWordWrap(True)
+        self.help_topics.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.help_topics.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.help_topics.currentItemChanged.connect(self._open_help_topic)
+        side_layout.addWidget(self.help_topics, 1)
+        splitter.addWidget(side)
+        splitter.addWidget(self.tabs)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([285, 700])
+        layout.addWidget(splitter, 1)
+        shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
+        shortcut.activated.connect(lambda: (self.help_search.setFocus(), self.help_search.selectAll()))
+        self._help_shortcut = shortcut
+        self._help_timer = QTimer(self)
+        self._help_timer.setSingleShot(True)
+        self._help_timer.setInterval(120)
+        self._help_timer.timeout.connect(self._highlight_help)
+        self.help_search.textChanged.connect(lambda: self._help_timer.start())
+        self.tabs.currentChanged.connect(lambda: self._highlight_help())
+        self._filter_help('')
+
+    def _filter_help(self, query):
+        terms = query.casefold().split()
+        self.help_topics.blockSignals(True)
+        self.help_topics.clear()
+        groups = ('LelSploit', 'Extensions', 'Macros')
+        matches = [section for section in self._doc_sections if all(term in section['text'].casefold() for term in terms)]
+        if terms:
+            matches.sort(key=lambda section: (not all(term in section['title'].casefold() for term in terms), section['tab']))
+        for section in matches:
+            item = QListWidgetItem(f"{groups[section['tab']]} · {section['title']}")
+            item.setData(Qt.ItemDataRole.UserRole, section)
+            item.setToolTip(section['text'][:450])
+            self.help_topics.addItem(item)
+        self.help_topics.blockSignals(False)
+        self.help_count.setText(f'{len(matches)} sections' if matches else 'No sections found. Try a shorter word.')
+        if terms and matches:
+            self.help_topics.setCurrentRow(0)
+        self._highlight_help()
+
+    def _open_help_topic(self, item, previous=None):
+        if item is None:
+            return
+        section = item.data(Qt.ItemDataRole.UserRole)
+        self.tabs.setCurrentIndex(section['tab'])
+        browser = self._doc_browsers[section['tab']]
+        browser.scrollToAnchor(section['anchor'])
+        self._highlight_help()
+
+    def _next_help_result(self):
+        count = self.help_topics.count()
+        if count:
+            self.help_topics.setCurrentRow((self.help_topics.currentRow()+1) % count)
+
+    def _highlight_help(self):
+        if not hasattr(self, 'help_search'):
+            return
+        words = self.help_search.text().split()
+        for browser in self._doc_browsers:
+            selections = []
+            for word in words:
+                cursor = QTextCursor(browser.document())
+                while len(selections) < 1500:
+                    cursor = browser.document().find(word, cursor)
+                    if cursor.isNull():
+                        break
+                    selection = QTextEdit.ExtraSelection()
+                    selection.cursor = cursor
+                    selection.format.setBackground(QColor('#68511b'))
+                    selection.format.setForeground(QColor('#ffffff'))
+                    selections.append(selection)
+            browser.setExtraSelections(selections)
+
 
     @staticmethod
     def _make_browser(html):
@@ -9050,6 +9311,37 @@ class SettingsWindow(QDialog):
         layout.setSpacing(14)
         settings_scroll.setWidget(settings_body)
         outer_layout.addWidget(settings_scroll, 1)
+
+        update_title = QLabel("Updates")
+        update_title.setStyleSheet("color:#eeeeee; font-size:14px; font-weight:600;")
+        layout.addWidget(update_title)
+        self.update_manager = getattr(self.owner, 'update_manager', None)
+        self.automatic_updates_check = BrightCheckBox("Get newest updates when available")
+        self.automatic_updates_check.setToolTip("Check at startup and every hour. You choose when to download and install.")
+        layout.addWidget(self.automatic_updates_check)
+        update_hint = QLabel("Check automatically at startup and every hour. Install when you're ready.")
+        update_hint.setWordWrap(True)
+        update_hint.setStyleSheet("color:#8f999f; font-size:11px;")
+        layout.addWidget(update_hint)
+        self.update_status = QLabel()
+        self.update_status.setWordWrap(True)
+        self.update_status.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.update_status)
+        self.check_updates_button = QPushButton("Check for updates")
+        self.check_updates_button.setFixedHeight(34)
+        update_row = QHBoxLayout()
+        update_row.addWidget(self.check_updates_button)
+        update_row.addStretch(1)
+        layout.addLayout(update_row)
+        layout.addSpacing(8)
+        if self.update_manager is not None:
+            self.automatic_updates_check.toggled.connect(self.update_manager.set_auto_enabled)
+            self.check_updates_button.clicked.connect(self.update_manager.settings_action)
+            self.update_manager.status_changed.connect(self.refresh_update_status)
+        else:
+            self.automatic_updates_check.setEnabled(False)
+            self.check_updates_button.setEnabled(False)
+        self.refresh_update_status()
 
         install_title = QLabel("ScriptBlox install behavior")
         install_title.setStyleSheet("color: #eeeeee; font-size: 14px; font-weight: 600;")
@@ -9231,7 +9523,20 @@ class SettingsWindow(QDialog):
         apply_blur_style(self)
         self.reload()
 
+    def refresh_update_status(self):
+        manager = self.update_manager
+        if manager is None:
+            self.update_status.setText("Open LelSploit using main.pyw to check for updates.")
+            return
+        self.automatic_updates_check.blockSignals(True)
+        self.automatic_updates_check.setChecked(manager.auto_enabled())
+        self.automatic_updates_check.blockSignals(False)
+        self.update_status.setText(manager.status)
+        self.check_updates_button.setText("View update" if manager.release else "Checking…" if manager.state == 'checking' else "Check for updates")
+        self.check_updates_button.setEnabled(manager.state not in ('checking','downloading','launching'))
+
     def reload(self):
+        self.refresh_update_status()
         behavior = self.owner.install_behavior()
         index = self.install_combo.findData(behavior)
         self.install_combo.blockSignals(True)
@@ -9773,7 +10078,9 @@ class LelSploitWindow(QMainWindow):
         self.scriptblox_button.setMinimumWidth(104)
         self.scriptblox_button.clicked.connect(self.open_scriptblox)
         self.set_button_icon(self.scriptblox_button, "scriptblox")
-        self.lelhub_button = QPushButton("LelHub")
+        self.lelhub_button = QPushButton()
+        self.lelhub_button.setObjectName("iconButton")
+        self.lelhub_button.setAccessibleName("LelHub")
         self.lelhub_button.setToolTip("Open and execute LelHub in a new tab")
         self.lelhub_button.clicked.connect(self.open_lelhub)
         self.set_button_icon(self.lelhub_button, "lelhub")
@@ -9876,12 +10183,12 @@ class LelSploitWindow(QMainWindow):
             (self.save_button, "file"),
             (self.reattach_button, "attach"),
             (self.scriptblox_button, "scriptblox"),
-            (self.lelhub_button, "lelhub"),
             (self.roblox_button, "start"),
         ):
             button.setFixedSize(text_button_size)
             self.set_button_icon(button, icon_name)
         for button, icon_name in (
+            (self.lelhub_button, "lelhub"),
             (self.tools_button, "tools"),
             (self.documentation_button, "documentation"),
             (self.fastflags_button, "fastflags"),
@@ -9898,21 +10205,22 @@ class LelSploitWindow(QMainWindow):
         controls.addWidget(self.execute_button, 0, 0)
         controls.addWidget(self.reattach_button, 0, 1)
         controls.addWidget(self.scriptblox_button, 0, 2)
-        controls.addWidget(self.lelhub_button, 0, 3)
-        controls.setColumnStretch(4, 1)
+        controls.setColumnStretch(3, 1)
 
         right_top = QHBoxLayout()
+        right_top.setDirection(QHBoxLayout.Direction.LeftToRight)
         self.header_layout = right_top
         right_top.setContentsMargins(0, 0, 0, 0)
         right_top.setSpacing(int(ui_config("buttons", "spacing", 5)))
         right_top.addWidget(self.extensions_button)
+        right_top.insertWidget(right_top.indexOf(self.extensions_button), self.lelhub_button)
         right_top.addWidget(self.macros_button)
         right_top.addWidget(self.fastflags_button)
         right_top.addWidget(self.visual_wizard_button)
         right_top.addWidget(self.tools_button)
         right_top.addWidget(self.documentation_button)
         right_top.addWidget(self.settings_button)
-        controls.addLayout(right_top, 0, 5, 1, 7, Qt.AlignmentFlag.AlignRight)
+        controls.addLayout(right_top, 0, 4, 1, 8, Qt.AlignmentFlag.AlignRight)
         layout.addWidget(self.editor_tabs, 1)
         layout.addLayout(controls)
 
@@ -10579,9 +10887,9 @@ class LelSploitWindow(QMainWindow):
             self.syntax_color("syntax_string", syntax_config("syntax_string", "#a8c77a")): (lexer.String, lexer.Character, lexer.LiteralString, lexer.UnclosedString),
             self.syntax_color("syntax_number", syntax_config("syntax_number", "#c9a56f")): (lexer.Number,),
             self.syntax_color("syntax_operator", syntax_config("syntax_operator", "#d7dadd")): (lexer.Operator,),
-            self.syntax_color("syntax_builtin", syntax_config("syntax_builtin", "#7db0d5")): (lexer.BasicFunctions, lexer.KeywordSet5, lexer.KeywordSet6, lexer.KeywordSet7),
+            self.syntax_color("syntax_builtin", syntax_config("syntax_builtin", "#7db0d5")): (lexer.BasicFunctions, lexer.KeywordSet5, lexer.KeywordSet7),
             self.syntax_color("syntax_function", syntax_config("syntax_function", "#7daee0")): (lexer.StringTableMathsFunctions, lexer.CoroutinesIOSystemFacilities),
-            self.syntax_color("syntax_type", syntax_config("syntax_type", "#b5a0d2")): (lexer.KeywordSet8,),
+            self.syntax_color("syntax_type", syntax_config("syntax_type", "#b5a0d2")): (lexer.KeywordSet6, lexer.KeywordSet8),
         }
 
     def syntax_color(self, key, default):
@@ -10794,6 +11102,8 @@ class LelSploitWindow(QMainWindow):
         background = QColor(self.appearance_color("editor_bg", ui_config("editor", "background", "#121416")))
         foreground = QColor(self.appearance_color("editor_text", ui_config("editor", "text", "#f1f2f2")))
         lexer = editor._lel_lexer
+        for indicator, key, default in ((20, "syntax_function", "#7daee0"), (24, "syntax_type", "#c4a7e7"), (25, "syntax_string", "#a8c77a"), (26, "syntax_keyword", "#86a8e7")):
+            send(editor.SCI_INDICSETFORE, indicator, QColor(self.syntax_color(key, default)))
         lexer.setPaper(background)
         send(editor.SCI_SETLEXER, editor.SCLEX_NULL)
         for style in range(33):
@@ -12677,6 +12987,9 @@ class LelSploitWindow(QMainWindow):
             event.ignore()
             self.hide_to_tray(show_notice=True)
             return
+        if hasattr(self, 'update_manager'):
+            self.update_manager.timer.stop()
+            self.update_manager.cancel_download()
         self.stopping.set()
         if self.api_cancel is not None:
             self.api_cancel.set()
@@ -12767,11 +13080,12 @@ class PopupStyleFilter(QObject):
         return super().eventFilter(watched, event)
 
 
-def main():
+def main(app_version="1.1.0"):
     try:
         configure_windows_identity()
         app = QApplication(sys.argv)
         app.setApplicationName("LelSploit")
+        app.setApplicationVersion(app_version)
         app.setApplicationDisplayName("LelSploit")
         app.setOrganizationName("LelSploit")
         if hasattr(app, "setDesktopFileName"):
@@ -12784,6 +13098,10 @@ def main():
         if not icon.isNull():
             app.setWindowIcon(icon)
         window = LelSploitWindow()
+        from lelsploit_update_ui import UpdateController
+        window.app_version = app_version
+        window.update_manager = UpdateController(window, app_version, APPDATA_DIR,
+                                                 blur_content_layout, apply_blur_style, apply_window_icon)
 
         try:
             window.log(
