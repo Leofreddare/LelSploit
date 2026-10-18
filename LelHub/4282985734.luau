@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Combat Warriors")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 local section = Hub.Tabs.Game:CreateSection("Hitboxes")
 local enabled, size, transparency = false, 10, 0.7
 local originals = {}

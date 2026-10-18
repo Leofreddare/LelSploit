@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("My Knife Farm")
 local LelUI = Hub.Native
 local LelAPI = Hub:Interface("Rayfield")
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Rayfield = LelAPI
 
@@ -62,7 +64,7 @@ local autoUpgradeEnabled = false
 local sellInterval = 60
 
 local currentCamera = game.Workspace.CurrentCamera
-player.Idled:Connect(function()
+Hub:Connect(player.Idled, function()
     virtualUser:Button2Down(Vector2.zero, currentCamera.CFrame)
     task.wait(1)
     virtualUser:Button2Up(Vector2.zero, currentCamera.CFrame)
@@ -202,7 +204,7 @@ local function sellInventoryItems()
 end
 
 task.spawn(function()
-    conveyor.SpawnedCase.ChildAdded:Connect(function(child)
+    Hub:Connect(conveyor.SpawnedCase.ChildAdded, function(child)
         if not autoRollEnabled then return end
         task.spawn(function()
             task.wait(0.01)

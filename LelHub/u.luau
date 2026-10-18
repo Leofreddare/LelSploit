@@ -1,3 +1,11 @@
+local function bindLelHubChange(control, callback)
+    local initial = true
+    control:OnChanged(function(...)
+        if initial then initial = false return end
+        callback(...)
+    end)
+end
+
 local function lelHubTitle(value)
     local title = tostring(value or "")
     title = title:gsub("<[^>]*>", ""):gsub("_", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
@@ -43,7 +51,7 @@ local function installLelHubSpacing(window, connect)
         if object:IsA("UIPadding") then
             local frame = object.Parent
             if frame and frame:IsA("Frame") and frame.Parent and frame.Parent:IsA("TextButton") then
-                object.PaddingTop, object.PaddingBottom = UDim.new(0, 6), UDim.new(0, 6)
+                object.PaddingTop, object.PaddingBottom = UDim.new(0, 10), UDim.new(0, 10)
                 seen[object] = true
             end
             return
@@ -56,17 +64,7 @@ local function installLelHubSpacing(window, connect)
         local isSection = sectionRoot and sectionRoot.Parent and sectionRoot.Parent:IsA("ScrollingFrame") and sectionRoot.Parent.Parent == holder and container.Position.Y.Offset == 24
         if not isTab and not isSection then return end
         seen[object] = true
-        object.Padding = UDim.new(0, 2)
-        if isSection then
-            container.Position = UDim2.fromOffset(0, 34)
-            local heading = sectionRoot:FindFirstChildOfClass("TextLabel")
-            if heading then heading.Position = UDim2.fromOffset(0, 12) end
-            local function resizeSection()
-                sectionRoot.Size = UDim2.new(1, 0, 0, object.AbsoluteContentSize.Y + 35)
-            end
-            connect(object:GetPropertyChangedSignal("AbsoluteContentSize"), resizeSection)
-            resizeSection()
-        end
+        object.Padding = UDim.new(0, isTab and 8 or 4)
         if isTab then
             local padding = container:FindFirstChildOfClass("UIPadding")
             if padding then
@@ -133,7 +131,7 @@ local function installLelHubReviewedFeatures(library, window, configuration)
         if kind == "Dropdown" then settings.Values, settings.Multi = minimum, false end
         local item = parent["Create" .. kind](parent, "LelReviewed_" .. name .. "_" .. sequence, settings)
         local initializing = true
-        item:OnChanged(function(value) if not initializing and not stopped then callback(value, item) end end)
+        bindLelHubChange(item, function(value) if not initializing and not stopped then callback(value, item) end end)
         initializing = false
         return item
     end
@@ -511,7 +509,7 @@ local function installLelHubExpandedTools(library, window, configuration)
         if kind == "Dropdown" then options.Values, options.Multi = values, false end
         local item = parent["Create" .. kind](parent, "LelExpanded_" .. serial, options)
         local initializing = true
-        item:OnChanged(function(value) if not initializing and not stopped then callback(value) end end)
+        bindLelHubChange(item, function(value) if not initializing and not stopped then callback(value) end end)
         initializing = false
         return item
     end
@@ -769,7 +767,7 @@ local function installLelHubControls(library, window, configuration)
     local function register(parent, kind, id, options, callback)
         local control = ui(parent, kind, "LelShared_" .. id, options)
         controls[id] = control
-        control:OnChanged(function(value)
+        bindLelHubChange(control, function(value)
             if not loading and not destroyed then
                 callback(value)
             end
@@ -926,7 +924,7 @@ local function installLelHubControls(library, window, configuration)
     local movement = ui(utilityTab, "Section", "Movement")
 
     if configuration.BasicMovement then
-        for _, entry in ipairs({ { "WalkSpeed", "Walk speed", 16, 16, 500 }, { "JumpPower", "Jump power", 50, 0, 500 }, { "HipHeight", "Hip height", 2, 0, 50 } }) do
+        for _, entry in ipairs({ { "WalkSpeed", "Walk speed", 16, 16, 500 }, { "JumpPower", "Jump power", 50, 0, 500 }, { "HipHeight", "Hip height", (select(2, parts()) and select(2, parts()).HipHeight) or 4, 0, 50 } }) do
             local property = entry[1]
             if not configuration.Skip or not configuration.Skip[property] then
                 slider(movement, property, entry[2], entry[3], entry[4], entry[5], function(value)
@@ -1698,7 +1696,7 @@ local function installLelHubControls(library, window, configuration)
         connect(library.OnUnload, cleanup)
     end
 
-    return { Cleanup = cleanup, Controls = controls, Launcher = launcher, Settings = settingsTab, State = state }
+    return { Cleanup = cleanup, Controls = controls, Launcher = launcher, Settings = settingsTab, Player = utilityTab, Players = configuration.ExpandedPlayersTab, State = state }
 end
 
 local function createLelHub(name)
@@ -1706,12 +1704,14 @@ local function createLelHub(name)
     environment.LelHubModules = environment.LelHubModules or {}
     local previous = environment.LelHubModules[name]
     if previous then previous.Cleanup() end
+    for _, active in pairs(environment.LelHubModules) do if active and active.Cleanup then active.Cleanup() end end
+    if environment.LelHubGlobal and environment.LelHubGlobal.Cleanup then environment.LelHubGlobal.Cleanup() end
     local library = loadstring(game:HttpGetAsync("https://github.com/ActualMasterOogway/Fluent-Renewed/releases/latest/download/Fluent.luau"))()
     local window = library:CreateWindow({ Title = "LelHub " .. name, SubTitle = "by LelSploit", Size = UDim2.fromOffset(760, 540), MinSize = Vector2.new(480, 360), TabWidth = 155, Resize = true, Acrylic = false, Theme = "Dark", MinimizeKey = Enum.KeyCode.RightShift })
     local hub = { Library = library, Window = window, Connections = {}, Resources = {}, Tabs = {}, Controls = {}, Stopped = false }
     local serial = 0
     function hub:Connect(signal, callback)
-        local connection = signal:Connect(callback)
+        local connection = signal:Connect(function(...) if not self.Stopped then callback(...) end end)
         table.insert(self.Connections, connection)
         return connection
     end
@@ -1730,19 +1730,19 @@ local function createLelHub(name)
     function hub:Toggle(tab, id, title, callback, default)
         local raw = tab:CreateToggle(id, { Title = lelHubTitle(title), Default = default == true })
         self.Controls[id] = raw
-        raw:OnChanged(function(value) if not self.Stopped then callback(value) end end)
+        bindLelHubChange(raw, function(value) if not self.Stopped then callback(value) end end)
         return raw
     end
     function hub:Slider(tab, id, title, default, minimum, maximum, callback, decimals)
         local raw = tab:CreateSlider(id, { Title = lelHubTitle(title), Default = default, Min = minimum, Max = maximum, Rounding = decimals or 0 })
         self.Controls[id] = raw
-        raw:OnChanged(function(value) if not self.Stopped then callback(value) end end)
+        bindLelHubChange(raw, function(value) if not self.Stopped then callback(value) end end)
         return raw
     end
     function hub:Dropdown(tab, id, title, values, default, callback)
         local raw = tab:CreateDropdown(id, { Title = lelHubTitle(title), Values = values, Default = default, Multi = false })
         self.Controls[id] = raw
-        raw:OnChanged(function(value) if not self.Stopped then callback(value) end end)
+        bindLelHubChange(raw, function(value) if not self.Stopped then callback(value) end end)
         return raw
     end
     function hub:Button(tab, title, callback)
@@ -1775,6 +1775,7 @@ local function createLelHub(name)
         self.Shared = installLelHubControls(library, window, configuration)
         self:Add(self.Shared.Cleanup)
         self.Tabs.Settings = self.Shared.Settings
+        self.Tabs.Player, self.Tabs.Players = self.Shared.Player, self.Shared.Players
         if library.OnUnload then self:Connect(library.OnUnload, self.Cleanup) end
         window:SelectTab(1)
         return self
@@ -1851,7 +1852,7 @@ local function createGameInterface(hub, style)
             return value
         end
         local initializing = true
-        native:OnChanged(function(value)
+        bindLelHubChange(native, function(value)
             if hub.Stopped or api.Unloaded or (api.Controller and not api.Controller.Active) then return end
             control.Value = value
             if initializing then return end
@@ -1937,9 +1938,15 @@ local function createGameInterface(hub, style)
         return group
     end
     local window = {}
+    local firstGameTab = true
     function window:CreateTab(title, icon)
         if type(title) == "table" then icon, title = title.Icon, title.Title or title.Name end
-        local raw = hub.Tabs[title] or hub:Tab(title, type(icon) == "string" and icon or "grid")
+        local raw = hub.Tabs[title]
+        if not raw and firstGameTab and title ~= "Settings" and title ~= "Player" and title ~= "Players" then
+            raw, firstGameTab = hub.Tabs.Game, false
+            hub.Tabs[title] = raw
+        end
+        raw = raw or hub:Tab(title, type(icon) == "string" and icon or "grid")
         return wrap(raw)
     end
     window.Tab, window.AddTab = window.CreateTab, window.CreateTab
@@ -1962,112 +1969,32 @@ local function createGameInterface(hub, style)
     return api
 end
 
-local function installLelHubGameObjects(hub)
-    local tab = hub.Tabs.Game or hub:Tab("Game")
-    local section = tab:CreateSection("Game Objects")
-    local player = game:GetService("Players").LocalPlayer
-    local kind, query, selected, range, enabled = "NPCs", "", nil, 1000, false
-    local entries, markers = {}, {}
-    local function root() return player.Character and player.Character:FindFirstChild("HumanoidRootPart") end
-    local function physical(object)
-        if object:IsA("BasePart") then return object end
-        if object:IsA("Attachment") then return object:FindFirstAncestorWhichIsA("BasePart") end
-        if object:IsA("Model") then return object.PrimaryPart or object:FindFirstChild("HumanoidRootPart") or object:FindFirstChildWhichIsA("BasePart", true) end
-        if object:IsA("ProximityPrompt") or object:IsA("TouchTransmitter") then return object.Parent and physical(object.Parent) end
-        if object:IsA("Tool") then return object:FindFirstChild("Handle") end
-    end
-    local function clear()
-        for object, marker in pairs(markers) do marker:Destroy() markers[object] = nil end
-    end
-    local targetControl
-    local function scan()
-        clear()
-        entries, selected = {}, nil
-        local names = { "None" }
-        for _, object in ipairs(workspace:GetDescendants()) do
-            local matches = kind == "NPCs" and object:IsA("Model") and object:FindFirstChildOfClass("Humanoid") and not game:GetService("Players"):GetPlayerFromCharacter(object)
-                or kind == "Tools" and object:IsA("Tool")
-                or kind == "Prompts" and object:IsA("ProximityPrompt")
-                or kind == "Touch Parts" and object:IsA("TouchTransmitter")
-                or kind == "Seats" and (object:IsA("Seat") or object:IsA("VehicleSeat"))
-            if matches and physical(object) and (query == "" or object:GetFullName():lower():find(query, 1, true)) then
-                local label = object:GetFullName()
-                local unique, number = label, 1
-                while entries[unique] do number = number + 1 unique = label .. " (" .. number .. ")" end
-                entries[unique] = object
-                table.insert(names, unique)
-            end
-        end
-        table.sort(names)
-        targetControl:SetValues(names)
-        targetControl:SetValue("None")
-        if #names == 1 then hub:Notify("No matching objects are currently loaded.") end
-    end
-    hub:Dropdown(section, "ObjectKind", "Object Type", { "NPCs", "Tools", "Prompts", "Touch Parts", "Seats" }, kind, function(value) kind = value entries, selected = {}, nil clear() end)
-    local initializing = true
-    local filter = section:CreateInput("LelObjectFilter", { Title = "Name Filter", Default = "", Finished = true })
-    filter:OnChanged(function(value) if not initializing then query = tostring(value):lower() end end)
-    initializing = false
-    hub:Button(section, "Refresh Objects", scan)
-    targetControl = hub:Dropdown(section, "ObjectTarget", "Object", { "None" }, "None", function(value) selected = entries[value] end)
-    local function nearest()
-        local myRoot, best, distance = root(), nil, math.huge
-        if not myRoot then return end
-        for _, object in pairs(entries) do
-            local part = object.Parent and physical(object)
-            if part then local gap = (part.Position - myRoot.Position).Magnitude if gap < distance then best, distance = object, gap end end
-        end
-        return best
-    end
-    hub:Button(section, "Select Nearest Object", function()
-        local object = nearest()
-        for name, candidate in pairs(entries) do if candidate == object then targetControl:SetValue(name) return end end
-        hub:Notify("Refresh objects first.")
-    end)
-    hub:Button(section, "Teleport to Object", function()
-        local myRoot, part = root(), selected and selected.Parent and physical(selected)
-        local human = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-        if human and human.SeatPart then hub:Notify("Leave your seat first.") return end
-        if myRoot and part then myRoot.CFrame = part.CFrame * CFrame.new(0, 3, 4) myRoot.AssemblyLinearVelocity = Vector3.zero end
-    end)
-    hub:Button(section, "Interact with Prompt", function()
-        local prompt = selected and selected:IsA("ProximityPrompt") and selected
-        local myRoot, part = root(), prompt and physical(prompt)
-        if not prompt or not prompt.Enabled or not part or not myRoot then hub:Notify("Select an enabled prompt.") return end
-        if (part.Position - myRoot.Position).Magnitude > prompt.MaxActivationDistance then hub:Notify("Move closer to the prompt.") return end
-        if type(fireproximityprompt) == "function" then fireproximityprompt(prompt, prompt.HoldDuration)
-        else
-            prompt:InputHoldBegin()
-            local thread = task.delay(prompt.HoldDuration + 0.05, function() pcall(function() prompt:InputHoldEnd() end) end)
-            hub:Add(function() pcall(task.cancel, thread) pcall(function() prompt:InputHoldEnd() end) end)
-        end
-    end)
-    hub:Toggle(section, "ObjectESP", "Object ESP", function(value) enabled = value if not value then clear() end end, false)
-    hub:Slider(section, "ObjectESPRange", "ESP Distance", range, 50, 5000, function(value) range = value end)
-    local elapsed = 0
-    hub:Connect(game:GetService("RunService").Heartbeat, function(delta)
-        elapsed = elapsed + delta
-        if elapsed < 0.25 then return end
-        elapsed = 0
-        if not enabled then return end
-        local myRoot = root()
-        for _, object in pairs(entries) do
-            local part = object.Parent and physical(object)
-            local visible = part and myRoot and (part.Position - myRoot.Position).Magnitude <= range
-            if not visible and markers[object] then markers[object]:Destroy() markers[object] = nil
-            elseif visible and not markers[object] then
-                local marker = Instance.new("Highlight")
-                marker.Name, marker.Adornee = "LelHubObjectESP", object:IsA("Model") and object or part
-                marker.FillTransparency, marker.OutlineColor = 0.85, Color3.fromRGB(125, 180, 255)
-                marker.DepthMode, marker.Parent = Enum.HighlightDepthMode.AlwaysOnTop, part
-                markers[object] = marker
-            end
-        end
-    end)
-    hub:Add(clear)
-end
-
 local function installLelHubLifecycle(hub)
+    function hub:OwnedTasks()
+        local threads = {}
+        local function launch(schedule, callback, ...)
+            if self.Stopped then return end
+            for thread in pairs(threads) do if coroutine.status(thread) == "dead" then threads[thread] = nil end end
+            local args = table.pack(...)
+            local thread = schedule(function()
+                if self.Stopped then return end
+                local ok = pcall(callback, table.unpack(args, 1, args.n))
+                threads[coroutine.running()] = nil
+                if not ok and not self.Stopped then self:Notify("A game routine could not start in the current game state.") end
+            end)
+            if coroutine.status(thread) ~= "dead" then threads[thread] = true end
+            return thread
+        end
+        local tasks = setmetatable({
+            spawn = function(callback, ...) return launch(task.spawn, callback, ...) end,
+            defer = function(callback, ...) return launch(task.defer, callback, ...) end,
+            delay = function(seconds, callback, ...) return launch(function(run) return task.delay(seconds, run) end, callback, ...) end,
+        }, { __index = task })
+        self:Add(function()
+            for thread in pairs(threads) do if thread ~= coroutine.running() and coroutine.status(thread) ~= "dead" then pcall(task.cancel, thread) end end
+        end)
+        return tasks
+    end
     function hub:Loop(section, title, interval, callback)
         local enabled, busy, elapsed = false, false, 0
         local worker
@@ -2188,7 +2115,7 @@ local function installNativeUI(hub)
         elseif kind == "Input" then settings.Finished = true end
         local control = group["Create" .. kind](group, id(), settings)
         local initializing = true
-        control:OnChanged(function(value)
+        bindLelHubChange(control, function(value)
             if not initializing and not hub.Stopped then callback(value) end
         end)
         initializing = false
@@ -2281,7 +2208,6 @@ return function(name)
         return self.Native:Control(nil, "Input", title, default, callback)
     end
     installLelHubLifecycle(hub)
-    installLelHubGameObjects(hub)
     hub:Finish()
     return hub
 end

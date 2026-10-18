@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Forsaken")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 local section = Hub.Tabs.Game:CreateSection("Generators")
 local player = game:GetService("Players").LocalPlayer
 local interval, autoSprint, lastGenerator = 2.5, false, nil

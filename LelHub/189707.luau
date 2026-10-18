@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Natural Disaster Survival")
 local LelUI = Hub.Native
 local LelAPI = Hub:Interface("Vapor")
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 if _G.EmoteFling_GlobalCleanup then
     pcall(function() _G.EmoteFling_GlobalCleanup() end)
@@ -38,10 +40,10 @@ local EmoteFlingConfig = {
     NotificationsEnabled = true,
     FloatingButtonsEnabled = true,
     FloatingButtonScale = 0.7,
-    antiFallEnabled = true,
-    godEnabled = true,
-    antiFlingEnabled = true,
-    noclipEnabled = true,
+    antiFallEnabled = false,
+    godEnabled = false,
+    antiFlingEnabled = false,
+    noclipEnabled = false,
 }
 
 local EmoteFlingTrack = nil
@@ -466,7 +468,7 @@ flingTab:CreateKeybind({
     end,
 })
 
-local flingInputConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+local flingInputConn = Hub:Connect(UserInputService.InputBegan, function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.Unknown then return end 
     
@@ -617,7 +619,7 @@ local function HookAntiFall(char)
             local z = Vector3.zero
             
             DisconnectConnection("antiFallLoopConn")
-            local conn = hb:Connect(function()
+            local conn = Hub:Connect(hb, function()
                 if not EmoteFlingConfig.antiFallEnabled or not r.Parent then
                     DisconnectConnection("antiFallLoopConn")
                     return
@@ -650,7 +652,7 @@ local function OnAntiFallToggle(Value, isInitialization)
         if LocalPlayer.Character then HookAntiFall(LocalPlayer.Character) end
 
         DisconnectConnection("antiFallRespawnConn")
-        local connRespawn = LocalPlayer.CharacterAdded:Connect(function(char)
+        local connRespawn = Hub:Connect(LocalPlayer.CharacterAdded, function(char)
             if EmoteFlingConfig.antiFallEnabled then HookAntiFall(char) end
         end)
         RegisterConnection("antiFallRespawnConn", connRespawn)
@@ -719,7 +721,7 @@ local function OnGodToggle(Value, isInitialization)
         if LocalPlayer.Character then ApplyGodProperties(LocalPlayer.Character) end
 
         DisconnectConnection("godRespawnConn")
-        local connRespawn = LocalPlayer.CharacterAdded:Connect(function(char)
+        local connRespawn = Hub:Connect(LocalPlayer.CharacterAdded, function(char)
             if EmoteFlingConfig.godEnabled then ApplyGodProperties(char) end
         end)
         RegisterConnection("godRespawnConn", connRespawn)
@@ -762,7 +764,7 @@ local function OnAntiFlingToggle(Value, isInitialization)
         DisconnectConnection("antiFlingLoopConn")
         
         
-        local conn = RunService.Stepped:Connect(function(_, dt)
+        local conn = Hub:Connect(RunService.Stepped, function(_, dt)
             if not EmoteFlingConfig.antiFlingEnabled then return end
             
             char = LocalPlayer.Character
@@ -887,10 +889,10 @@ local function HookNoClip(char)
         registerPart(part)
     end
 
-    local addedConn = char.DescendantAdded:Connect(registerPart)
+    local addedConn = Hub:Connect(char.DescendantAdded, registerPart)
     RegisterConnection("noclipAddedConn", addedConn)
     
-    local conn = RunService.Stepped:Connect(function()
+    local conn = Hub:Connect(RunService.Stepped, function()
         if not EmoteFlingConfig.noclipEnabled or not char.Parent then
             DisconnectConnection("noclipLoopConn")
             DisconnectConnection("noclipAddedConn")
@@ -915,7 +917,7 @@ local function OnNoClipToggle(Value, isInitialization)
         if LocalPlayer.Character then HookNoClip(LocalPlayer.Character) end
 
         DisconnectConnection("noclipRespawnConn")
-        local connRespawn = LocalPlayer.CharacterAdded:Connect(function(char)
+        local connRespawn = Hub:Connect(LocalPlayer.CharacterAdded, function(char)
             if EmoteFlingConfig.noclipEnabled then HookNoClip(char) end
         end)
         RegisterConnection("noclipRespawnConn", connRespawn)
@@ -944,7 +946,7 @@ noclipToggle = flingTab:CreateToggle({
 })
 
 DisconnectConnection("charAddedConn")
-local connCharAdded = LocalPlayer.CharacterAdded:Connect(function(newChar)
+local connCharAdded = Hub:Connect(LocalPlayer.CharacterAdded, function(newChar)
     if EmoteFlingConfig.Active then
         EmoteFlingConfig.Active = false
         Notify({ Title = "Emote Fling", Content = "Interrupted (respawn).", Duration = 2, Icon = "shield-off" })

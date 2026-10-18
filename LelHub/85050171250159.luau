@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Poop a Big Poop")
 local LelUI = Hub.Native
 local LelAPI = Hub:Interface("Rayfield")
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Rayfield = LelAPI
 

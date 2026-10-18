@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Missile Wars")
 local LelUI = Hub.Native
 local LelAPI = Hub:Interface("WindUI")
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local WindUI = LelAPI
 
@@ -703,7 +705,7 @@ local function scanAllTargets()
 end
 
 
-RunService.Heartbeat:Connect(function()
+Hub:Connect(RunService.Heartbeat, function()
     heartbeatCounter = heartbeatCounter + 1
 
     autoBuy()

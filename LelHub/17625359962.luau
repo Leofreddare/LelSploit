@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("RIVALS")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 local section = Hub.Tabs.Game:CreateSection("Combat")
 local preferences = {}
 Hub:SourceController(section, "Box ESP", function(current, task, hookfunction, hookmetamethod)
@@ -77,8 +79,7 @@ current:Add(function() pcall(function() name:Remove() end) end)
         end
     end
 
-    local update = current:Connect(current, RunService.RenderStepped, loop)
-    wtf[player].connection = update
+    current:Connect(RunService.RenderStepped, loop)
 end
 
 function remove(player)

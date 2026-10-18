@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("The Classic Soccer")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 local section = Hub.Tabs.Game:CreateSection("Game Controls")
 local preferences = {}
 Hub:SourceController(section, "Speed Compatibility", function(current, task, hookfunction, hookmetamethod)

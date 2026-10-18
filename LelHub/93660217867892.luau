@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Voxels")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local player = game:GetService("Players").LocalPlayer
 local radius, interval, hollow = 12, 0.1, false

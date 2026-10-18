@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Be Dino - Jurassic Dinosaur Simulation")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Players           = game:GetService("Players")
 local RunService        = game:GetService("RunService")
@@ -68,7 +70,7 @@ local function moveTo(targetPos)
     local reached = false
     stopMover()
 
-    moverConn = RunService.Heartbeat:Connect(function(dt)
+    moverConn = Hub:Connect(RunService.Heartbeat, function(dt)
         local hrp = getHRP()
         if not hrp or not running then
             reached = true

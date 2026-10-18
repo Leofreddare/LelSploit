@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Survive Homelander")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 local section = Hub.Tabs.Game:CreateSection("Map")
 Hub:Button(section, "Teleport to Random Spawn", function()
 local player = game.Players.LocalPlayer

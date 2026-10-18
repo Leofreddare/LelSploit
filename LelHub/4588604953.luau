@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Criminality")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local VirtualUser = game:GetService('VirtualUser')
 
@@ -155,7 +157,7 @@ do
         mainFrame.Position = UDim2.new(startPos.X.Scale, newX, startPos.Y.Scale, newY)
     end
 
-    mainFrame.InputBegan:Connect(function(input)
+    Hub:Connect(mainFrame.InputBegan, function(input)
         if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) then
             local absPos = mainFrame.AbsolutePosition
             local absSize = mainFrame.AbsoluteSize
@@ -168,7 +170,7 @@ do
                 startPos = mainFrame.Position
 
                 
-                input.Changed:Connect(function()
+                Hub:Connect(input.Changed, function()
                     if input.UserInputState == Enum.UserInputState.End then
                         dragging = false
                     end
@@ -177,14 +179,14 @@ do
         end
     end)
 
-    mainFrame.InputChanged:Connect(function(input)
+    Hub:Connect(mainFrame.InputChanged, function(input)
         
         if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
             dragInput = input
         end
     end)
 
-    UserInputService.InputChanged:Connect(function(input)
+    Hub:Connect(UserInputService.InputChanged, function(input)
         
         if input == dragInput and dragging then
             update(input)
@@ -192,7 +194,7 @@ do
     end)
 end
 
-UserInputService.InputBegan:Connect(function(input, gameProcessedEvent)
+Hub:Connect(UserInputService.InputBegan, function(input, gameProcessedEvent)
     
     if not gameProcessedEvent then
         
@@ -219,7 +221,7 @@ function NoFailLockpick_Enable()
     if not PlayerGui then return end
     
     
-    lockpickAddedConnection = PlayerGui.ChildAdded:Connect(function(Item)
+    lockpickAddedConnection = Hub:Connect(PlayerGui.ChildAdded, function(Item)
         if Item.Name == "LockpickGUI" then
             local mf = Item:WaitForChild("MF", 10)
             if not mf then return end
@@ -380,7 +382,7 @@ function BredMakurz_Enable()
     if BredMakurz_Enabled then return end 
     BredMakurz_Enabled = true
 
-    bredMakurzConnection = RunService.Heartbeat:Connect(function()
+    bredMakurzConnection = Hub:Connect(RunService.Heartbeat, function()
         ApplyBredMakurzModification()
     end)
 end
@@ -638,7 +640,7 @@ local function AutoPickupMoney_Logic()
     if Settings.IsDead == nil then Settings.IsDead = false end 
 
 
-    AutoPickupMoney_Connection = RunService.RenderStepped:Connect(function()
+    AutoPickupMoney_Connection = Hub:Connect(RunService.RenderStepped, function()
         
         if not AutoPickupMoney_Enabled then return end
 
@@ -735,7 +737,7 @@ local function Fly_Enable()
     end
     Fly_Enabled = true
 
-    Fly_Connection = RunService.RenderStepped:Connect(function(dt)
+    Fly_Connection = Hub:Connect(RunService.RenderStepped, function(dt)
         if not Fly_Enabled then
             return
         end
@@ -814,7 +816,7 @@ local function FullBright_Enable()
 	Lighting.FogEnd = 100000
 
 	
-	FullBright_Connection = RunService.RenderStepped:Connect(function()
+	FullBright_Connection = Hub:Connect(RunService.RenderStepped, function()
 		if not FullBright_Enabled then
 			FullBright_Connection:Disconnect()
 			return
@@ -907,7 +909,7 @@ local function Noclip_Enable()
 
     
     if not Noclip_Connection then
-        Noclip_Connection = RunService.RenderStepped:Connect(function()
+        Noclip_Connection = Hub:Connect(RunService.RenderStepped, function()
             
             if not Noclip_Enabled then
                 return
@@ -1144,7 +1146,7 @@ local function AdminCheck_Enable()
     if AdminCheck_Connection then AdminCheck_Connection:Disconnect() end
 
     
-    AdminCheck_Connection = Players.PlayerAdded:Connect(onPlayerJoining)
+    AdminCheck_Connection = Hub:Connect(Players.PlayerAdded, onPlayerJoining)
     print("Admin Check 2.1 Monitoring started.")
 
     
@@ -1295,7 +1297,7 @@ local runAttackLoop do
     end
 
     runAttackLoop = function()
-        return run.RenderStepped:Connect(function()
+        return Hub:Connect(run.RenderStepped, function()
             if not MeleeAura_Enabled then return end 
             local char = me.Character
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -1763,7 +1765,7 @@ do
 	end
 
 	
-	UpdateFrame:Connect(function(deltaTime)
+	Hub:Connect(UpdateFrame, function(deltaTime)
 		if not Shadow_Active or not Shadow_Usable then
 			
 			if not Shadow_Active and Char then
@@ -1780,7 +1782,7 @@ do
 
 
 	
-	P.CharacterAdded:Connect(function(NewCharacter)
+	Hub:Connect(P.CharacterAdded, function(NewCharacter)
 		
 		if Shadow_Active then DeactivateShadow() end
 
@@ -1819,7 +1821,7 @@ do
 		end
 	end)
 
-	P.CharacterRemoving:Connect(function(OldCharacter)
+	Hub:Connect(P.CharacterRemoving, function(OldCharacter)
 		if AnimTrack_Cache then
 			pcall(function() AnimTrack_Cache:Stop() end)
 			AnimTrack_Cache = nil
@@ -1882,7 +1884,7 @@ local function Collector_CoreLogic()
 		end
 	end
 
-	Collector_Signal = RS_S.RenderStepped:Connect(RunCollectorLogic)
+	Collector_Signal = Hub:Connect(RS_S.RenderStepped, RunCollectorLogic)
 end
 
 local function Collector_Activate()
@@ -1950,7 +1952,7 @@ task.spawn(function()
 	end
 end)
 
-localPlayer.CharacterAdded:Connect(function(character)
+Hub:Connect(localPlayer.CharacterAdded, function(character)
 	if not autofarmEnabled then
 		return
 	end
@@ -2228,7 +2230,7 @@ local function Noclip_Enable()
 
 	
 	if not Noclip_Connection then
-		Noclip_Connection = RunService.RenderStepped:Connect(function()
+		Noclip_Connection = Hub:Connect(RunService.RenderStepped, function()
 			
 			if not Noclip_Enabled then
 				return
@@ -2381,7 +2383,7 @@ local function CameraGetClosestToMouse_aim()
 end
 
 
-UserInputService_aim.InputBegan:Connect(function(input, gameProcessedEvent)
+Hub:Connect(UserInputService_aim.InputBegan, function(input, gameProcessedEvent)
     
     if not AimBotSettings then return end
     if gameProcessedEvent or not AimBotSettings.Enabled then return end
@@ -2405,7 +2407,7 @@ UserInputService_aim.InputBegan:Connect(function(input, gameProcessedEvent)
 end)
 
 
-UserInputService_aim.InputEnded:Connect(function(input, gameProcessedEvent)
+Hub:Connect(UserInputService_aim.InputEnded, function(input, gameProcessedEvent)
      
     if not AimBotSettings then return end
     if gameProcessedEvent or not AimBotSettings.Enabled then return end
@@ -2437,7 +2439,7 @@ UserInputService_aim.InputEnded:Connect(function(input, gameProcessedEvent)
 end)
 
 
-RunService_aim.Heartbeat:Connect(function(deltaTime)
+Hub:Connect(RunService_aim.Heartbeat, function(deltaTime)
     
     
     if AimBotSettings and AimBotSettings.Enabled then
@@ -2754,7 +2756,7 @@ do
     end
 
     
-    Player.CharacterAdded:Connect(function(NewCharacter)
+    Hub:Connect(Player.CharacterAdded, function(NewCharacter)
         
         if Track then
             pcall(function() Track:Stop() end)
@@ -2793,7 +2795,7 @@ do
         end
     end)
 
-    Player.CharacterRemoving:Connect(function(OldCharacter)
+    Hub:Connect(Player.CharacterRemoving, function(OldCharacter)
          if Track then
              pcall(function() Track:Stop() end)
              Track = nil
@@ -2803,7 +2805,7 @@ do
 
 
     
-    Heartbeat:Connect(function(deltaTime)
+    Hub:Connect(Heartbeat, function(deltaTime)
         
         if not InvisEnabled or not Invis_Fixed then
             
@@ -2963,10 +2965,10 @@ end
 
 local function onCharacterAdded_nr(character)
     for _, child in ipairs(character:GetChildren()) do if child:IsA("Tool") then handleWeapon(child) end end;
-    table.insert(NoRecoil_Connections, character.ChildAdded:Connect(function(child) if child:IsA("Tool") then handleWeapon(child) end end));
+    table.insert(NoRecoil_Connections, Hub:Connect(character.ChildAdded, function(child) if child:IsA("Tool") then handleWeapon(child) end end));
     local humanoid=character:WaitForChild("Humanoid",2);
     if humanoid then
-        table.insert(NoRecoil_Connections, humanoid.Died:Connect(function() if NoRecoil_Enabled then task.wait(1.5); cacheWeapons(); applyGunMods() end end))
+        table.insert(NoRecoil_Connections, Hub:Connect(humanoid.Died, function() if NoRecoil_Enabled then task.wait(1.5); cacheWeapons(); applyGunMods() end end))
     end
 end
 
@@ -2975,7 +2977,7 @@ function NoRecoil_Enable()
     NoRecoil_Enabled=true;
     cacheWeapons();
     applyGunMods();
-    table.insert(NoRecoil_Connections, Player_nr.CharacterAdded:Connect(onCharacterAdded_nr));
+    table.insert(NoRecoil_Connections, Hub:Connect(Player_nr.CharacterAdded, onCharacterAdded_nr));
     if Player_nr.Character then onCharacterAdded_nr(Player_nr.Character) end
 end
 
@@ -3248,12 +3250,12 @@ function EQR_UI:Initialize()
         catLabel.TextColor3 = Color3.fromRGB(180, 180, 190)
         catLabel.Parent = catButton
 
-        catButton.MouseEnter:Connect(function()
+        Hub:Connect(catButton.MouseEnter, function()
             if catButton ~= self.ActiveCategoryButton then
                 TweenService:Create(catButton, TweenInfo.new(0.1), { BackgroundColor3 = Color3.fromRGB(30, 30, 35) }):Play()
             end
         end)
-        catButton.MouseLeave:Connect(function()
+        Hub:Connect(catButton.MouseLeave, function()
             if catButton ~= self.ActiveCategoryButton then
                 TweenService:Create(catButton, TweenInfo.new(0.1), { BackgroundColor3 = Color3.fromRGB(20, 20, 25) }):Play()
             end
@@ -3300,8 +3302,8 @@ function EQR_UI:Initialize()
     table.insert(self.CategoryFrames.Rage, createToggleRowFrame("Ragebot", true, function() return Ragebot_Enabled end, Ragebot_Enable, Ragebot_Disable, function() return k.ragebot end, function(val) k.ragebot=val end))
     
     
-    UserInputService.InputBegan:Connect(function(...) self:OnInputBegan(...) end)
-    PlayerGui.ChildAdded:Connect(function(Item)
+    Hub:Connect(UserInputService.InputBegan, function(...) self:OnInputBegan(...) end)
+    Hub:Connect(PlayerGui.ChildAdded, function(Item)
         if Item.Name == "LockpickGUI" then
             ApplyLockpickModification()
         end

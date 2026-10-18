@@ -1,3 +1,11 @@
+local function bindLelHubChange(control, callback)
+    local initial = true
+    control:OnChanged(function(...)
+        if initial then initial = false return end
+        callback(...)
+    end)
+end
+
 local function lelHubTitle(value)
     local title = tostring(value or "")
     title = title:gsub("<[^>]*>", ""):gsub("_", " "):gsub("%s+", " "):match("^%s*(.-)%s*$")
@@ -43,7 +51,7 @@ local function installLelHubSpacing(window, connect)
         if object:IsA("UIPadding") then
             local frame = object.Parent
             if frame and frame:IsA("Frame") and frame.Parent and frame.Parent:IsA("TextButton") then
-                object.PaddingTop, object.PaddingBottom = UDim.new(0, 6), UDim.new(0, 6)
+                object.PaddingTop, object.PaddingBottom = UDim.new(0, 10), UDim.new(0, 10)
                 seen[object] = true
             end
             return
@@ -56,17 +64,7 @@ local function installLelHubSpacing(window, connect)
         local isSection = sectionRoot and sectionRoot.Parent and sectionRoot.Parent:IsA("ScrollingFrame") and sectionRoot.Parent.Parent == holder and container.Position.Y.Offset == 24
         if not isTab and not isSection then return end
         seen[object] = true
-        object.Padding = UDim.new(0, 2)
-        if isSection then
-            container.Position = UDim2.fromOffset(0, 34)
-            local heading = sectionRoot:FindFirstChildOfClass("TextLabel")
-            if heading then heading.Position = UDim2.fromOffset(0, 12) end
-            local function resizeSection()
-                sectionRoot.Size = UDim2.new(1, 0, 0, object.AbsoluteContentSize.Y + 35)
-            end
-            connect(object:GetPropertyChangedSignal("AbsoluteContentSize"), resizeSection)
-            resizeSection()
-        end
+        object.Padding = UDim.new(0, isTab and 8 or 4)
         if isTab then
             local padding = container:FindFirstChildOfClass("UIPadding")
             if padding then
@@ -133,7 +131,7 @@ local function installLelHubReviewedFeatures(library, window, configuration)
         if kind == "Dropdown" then settings.Values, settings.Multi = minimum, false end
         local item = parent["Create" .. kind](parent, "LelReviewed_" .. name .. "_" .. sequence, settings)
         local initializing = true
-        item:OnChanged(function(value) if not initializing and not stopped then callback(value, item) end end)
+        bindLelHubChange(item, function(value) if not initializing and not stopped then callback(value, item) end end)
         initializing = false
         return item
     end
@@ -511,7 +509,7 @@ local function installLelHubExpandedTools(library, window, configuration)
         if kind == "Dropdown" then options.Values, options.Multi = values, false end
         local item = parent["Create" .. kind](parent, "LelExpanded_" .. serial, options)
         local initializing = true
-        item:OnChanged(function(value) if not initializing and not stopped then callback(value) end end)
+        bindLelHubChange(item, function(value) if not initializing and not stopped then callback(value) end end)
         initializing = false
         return item
     end
@@ -769,7 +767,7 @@ local function installLelHubControls(library, window, configuration)
     local function register(parent, kind, id, options, callback)
         local control = ui(parent, kind, "LelShared_" .. id, options)
         controls[id] = control
-        control:OnChanged(function(value)
+        bindLelHubChange(control, function(value)
             if not loading and not destroyed then
                 callback(value)
             end
@@ -926,7 +924,7 @@ local function installLelHubControls(library, window, configuration)
     local movement = ui(utilityTab, "Section", "Movement")
 
     if configuration.BasicMovement then
-        for _, entry in ipairs({ { "WalkSpeed", "Walk speed", 16, 16, 500 }, { "JumpPower", "Jump power", 50, 0, 500 }, { "HipHeight", "Hip height", 2, 0, 50 } }) do
+        for _, entry in ipairs({ { "WalkSpeed", "Walk speed", 16, 16, 500 }, { "JumpPower", "Jump power", 50, 0, 500 }, { "HipHeight", "Hip height", (select(2, parts()) and select(2, parts()).HipHeight) or 4, 0, 50 } }) do
             local property = entry[1]
             if not configuration.Skip or not configuration.Skip[property] then
                 slider(movement, property, entry[2], entry[3], entry[4], entry[5], function(value)
@@ -1698,7 +1696,7 @@ local function installLelHubControls(library, window, configuration)
         connect(library.OnUnload, cleanup)
     end
 
-    return { Cleanup = cleanup, Controls = controls, Launcher = launcher, Settings = settingsTab, State = state }
+    return { Cleanup = cleanup, Controls = controls, Launcher = launcher, Settings = settingsTab, Player = utilityTab, Players = configuration.ExpandedPlayersTab, State = state }
 end
 
 
@@ -3133,7 +3131,7 @@ local function createInterface(context, library, window, lifetime, hub)
         defaults[id] = value
         settings[id] = value
         callbacks[id] = callback
-        control:OnChanged(function(nextValue)
+        bindLelHubChange(control, function(nextValue)
             settings[id] = nextValue
             apply(id, nextValue)
         end)

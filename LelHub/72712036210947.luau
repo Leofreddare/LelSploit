@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Fix It Up!")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
@@ -227,7 +229,7 @@ LelUI:Bind(bestCarBtn, "MouseButton1Click", "bestCarBtn", function()
     end
 end)
 
-UserInputService.InputBegan:Connect(function(i, p)
+Hub:Connect(UserInputService.InputBegan, function(i, p)
     if p then return end
     if i.KeyCode == Enum.KeyCode.Delete then
         running = false
@@ -246,11 +248,11 @@ UserInputService.InputBegan:Connect(function(i, p)
 end)
 
 local d, ds, sp
-main.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then d = true ds = i.Position sp = main.Position end end)
-UserInputService.InputChanged:Connect(function(i) if d and i.UserInputType == Enum.UserInputType.MouseMovement then
+Hub:Connect(main.InputBegan, function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then d = true ds = i.Position sp = main.Position end end)
+Hub:Connect(UserInputService.InputChanged, function(i) if d and i.UserInputType == Enum.UserInputType.MouseMovement then
     local delta = i.Position - ds
     main.Position = UDim2.new(sp.X.Scale, sp.X.Offset + delta.X, sp.Y.Scale, sp.Y.Offset + delta.Y)
 end end)
-UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then d = false end end)
+Hub:Connect(UserInputService.InputEnded, function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 then d = false end end)
 
 end)

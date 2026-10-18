@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Crop Incremental")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -130,7 +132,7 @@ local function captureDefaults()
 end
 captureDefaults()
 
-Player.CharacterAdded:Connect(function()
+Hub:Connect(Player.CharacterAdded, function()
 	repeat task.wait() until hum()
 	captureDefaults()
 	if wsOn then hum().WalkSpeed = 50 end

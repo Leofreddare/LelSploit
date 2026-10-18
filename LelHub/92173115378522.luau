@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Split The Sea")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
@@ -86,7 +88,7 @@ Hub:Button(Hub.Tabs.Game, "Collect from selected island", teleportOnce)
 Hub:Button(Hub.Tabs.Game, "Return to your plot", teleportHome)
 
 
-UserInputService.InputBegan:Connect(function(input, gp)
+Hub:Connect(UserInputService.InputBegan, function(input, gp)
     if gp then return end
 
     if input.KeyCode == Enum.KeyCode.G then

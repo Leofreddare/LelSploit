@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Supermarket Together")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local player = game.Players.LocalPlayer
 local RS = game:GetService("ReplicatedStorage")
@@ -212,7 +214,7 @@ local function toggleAutoKicker()
 	
 	
 	local connection
-	connection = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	connection = Hub:Connect(UserInputService.InputBegan, function(input, gameProcessed)
 		if gameProcessed then return end
 		if input.KeyCode == Enum.KeyCode.X then
 			autoKickerActive = false

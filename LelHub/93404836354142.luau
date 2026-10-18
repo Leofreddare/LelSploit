@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Phonk Clicker!")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -20,7 +22,7 @@ local function makeEvent()
     return {
         Fire = function(_, ...) b:Fire(...)
         end,
-        Connect = function(_, fn) return b.Event:Connect(fn) end
+        Connect = function(_, fn) return Hub:Connect(b.Event, fn) end
     }
 end
 
@@ -36,19 +38,19 @@ local Controls = {
 _G.MenuAPI = {
     OnToggle = function(label, fn)
         local c = Controls.toggles[label]
-        if c then c.Changed:Connect(fn) end
+        if c then Hub:Connect(c.Changed, fn) end
     end,
     OnSlider = function(label, fn)
         local c = Controls.sliders[label]
-        if c then c.Changed:Connect(fn) end
+        if c then Hub:Connect(c.Changed, fn) end
     end,
     OnCheckbox = function(label, fn)
         local c = Controls.checkboxes[label]
-        if c then c.Changed:Connect(fn) end
+        if c then Hub:Connect(c.Changed, fn) end
     end,
     OnColor = function(label, fn)
         local c = Controls.colorpickers[label]
-        if c then c.Changed:Connect(fn) end
+        if c then Hub:Connect(c.Changed, fn) end
     end,
     
     GetControl = function(typeName, label)
@@ -139,18 +141,18 @@ local function updateDrag(input)
     local delta = input.Position - dragStart
     main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
 end
-titleBar.InputBegan:Connect(function(input)
+Hub:Connect(titleBar.InputBegan, function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
         dragging = true
         dragStart = input.Position
         startPos = main.Position
-        input.Changed:Connect(function()
+        Hub:Connect(input.Changed, function()
             if input.UserInputState == Enum.UserInputState.End then dragging = false end
         end)
     end
 end)
-titleBar.InputChanged:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then dragInput = input end end)
-UserInputService.InputChanged:Connect(function(input) if dragging and input == dragInput then updateDrag(input) end end)
+Hub:Connect(titleBar.InputChanged, function(input) if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then dragInput = input end end)
+Hub:Connect(UserInputService.InputChanged, function(input) if dragging and input == dragInput then updateDrag(input) end end)
 
 
 LelUI:Bind(btnClose, "MouseButton1Click", "btnClose", function()
@@ -196,7 +198,7 @@ local function createCheckbox(parent, label, initial)
     local raw = LelUI:Control(parent, "Toggle", label, value, function(nextValue) value = nextValue event:Fire(nextValue) end)
     local control = { Get = function() return value end, Set = function(nextValue)
         raw:SetValue(nextValue)
-    end, Changed = { Connect = function(_, callback) return event:Connect(callback) end }, Instance = instance }
+    end, Changed = { Connect = function(_, callback) return Hub:Connect(event, callback) end }, Instance = instance }
     Controls.checkboxes[label] = control
     return control
 end
@@ -209,7 +211,7 @@ local function createToggle(parent, label, initial)
     local raw = LelUI:Control(parent, "Toggle", label, value, function(nextValue) value = nextValue event:Fire(nextValue) end)
     local control = { Get = function() return value end, Set = function(nextValue)
         raw:SetValue(nextValue)
-    end, Changed = { Connect = function(_, callback) return event:Connect(callback) end }, Instance = instance }
+    end, Changed = { Connect = function(_, callback) return Hub:Connect(event, callback) end }, Instance = instance }
     Controls.toggles[label] = control
     return control
 end
@@ -222,7 +224,7 @@ local function createSlider(parent, label, minVal, maxVal, defaultVal)
     local raw = LelUI:Control(parent, "Slider", label, value, function(nextValue) value = nextValue event:Fire(nextValue) end, minVal or 0, maxVal or 100)
     local control = { Get = function() return value end, Set = function(nextValue)
         raw:SetValue(nextValue)
-    end, Changed = { Connect = function(_, callback) return event:Connect(callback) end }, Instance = instance }
+    end, Changed = { Connect = function(_, callback) return Hub:Connect(event, callback) end }, Instance = instance }
     Controls.sliders[label] = control
     return control
 end
@@ -235,7 +237,7 @@ local function createColorPicker(parent, label, initial)
     local raw = LelUI:Control(parent, "Colorpicker", label, value, function(nextValue) value = nextValue event:Fire(nextValue) end)
     local control = { Get = function() return value end, Set = function(nextValue)
         raw:SetValueRGB(nextValue)
-    end, Changed = { Connect = function(_, callback) return event:Connect(callback) end }, Instance = instance }
+    end, Changed = { Connect = function(_, callback) return Hub:Connect(event, callback) end }, Instance = instance }
     Controls.colorpickers[label] = control
     return control
 end
@@ -256,7 +258,7 @@ local function attachCallback(control, callback)
     if not control then return end
 
     if type(control) == "table" and control.Changed and type(control.Changed.Connect) == "function" then
-        control.Changed:Connect(callback)
+        Hub:Connect(control.Changed, callback)
         return true
     end
 
@@ -354,7 +356,7 @@ local function onFPS(state)
         if fpsConn then fpsConn:Disconnect(); fpsConn = nil end
         local frames = 0
         local last = tick()
-        fpsConn = RunService.RenderStepped:Connect(function()
+        fpsConn = Hub:Connect(RunService.RenderStepped, function()
             frames = frames + 1
             local now = tick()
             if now - last >= 1 then
@@ -416,10 +418,10 @@ local autoClickConn, autoRebirthConn
 
 
 local cbAutoClick = createCheckbox(pContent, "AutoClick", false)
-cbAutoClick.Changed:Connect(function(state)
+Hub:Connect(cbAutoClick.Changed, function(state)
 	if state then
 		if autoClickConn then return end
-		autoClickConn = RunService.Heartbeat:Connect(function()
+		autoClickConn = Hub:Connect(RunService.Heartbeat, function()
 			pcall(function()
 				Clicker:FireServer()
 			end)
@@ -434,10 +436,10 @@ end)
 
 
 local cbAutoRebirth = createCheckbox(pContent, "AutoRebirth", false)
-cbAutoRebirth.Changed:Connect(function(state)
+Hub:Connect(cbAutoRebirth.Changed, function(state)
 	if state then
 		if autoRebirthConn then return end
-		autoRebirthConn = RunService.Heartbeat:Connect(function()
+		autoRebirthConn = Hub:Connect(RunService.Heartbeat, function()
 			pcall(function()
 				Rebirth:FireServer(1)
 			end)
@@ -493,7 +495,7 @@ end
 local function startUnlockLoop(interval)
     if unlockLoopConn then return end
     local last = 0
-    unlockLoopConn = RunService.Heartbeat:Connect(function(dt)
+    unlockLoopConn = Hub:Connect(RunService.Heartbeat, function(dt)
         local now = tick()
         if now - last < (interval or 0.5) then return end
         last = now
@@ -507,7 +509,7 @@ local function stopUnlockLoop()
     end
 end
 
-cbUnlock.Changed:Connect(function(state)
+Hub:Connect(cbUnlock.Changed, function(state)
     if state then
         doUnlockOnce()
     else
@@ -524,7 +526,7 @@ end
 
 local Players = game:GetService("Players")
 local plr = Players.LocalPlayer
-plr.AncestryChanged:Connect(function()
+Hub:Connect(plr.AncestryChanged, function()
     if not plr:IsDescendantOf(game) then cleanup() end
 end)
 
@@ -533,13 +535,13 @@ scroll.CanvasSize = UDim2.new(0,0,0, list.AbsoluteContentSize.Y + 12)
 
 
 if colPick and colPick.Changed then
-    colPick.Changed:Connect(function(c)
+    Hub:Connect(colPick.Changed, function(c)
         titleTxt.TextColor3 = c
     end)
 end
 
 
-LocalPlayer.AncestryChanged:Connect(function()
+Hub:Connect(LocalPlayer.AncestryChanged, function()
     if not LocalPlayer:IsDescendantOf(game) then
         pcall(function() gui:Destroy() end)
     end

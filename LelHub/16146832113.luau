@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Anime Vanguards")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -83,13 +85,13 @@ local function setupMinigame(bottom)
                 end
             end
 
-            conveyor.ChildAdded:Connect(function(child)
+            Hub:Connect(conveyor.ChildAdded, function(child)
                 if child.Name == "Note" and child:IsA("GuiObject") then
                     registerNote(child, buttonName, button)
                 end
             end)
 
-            conveyor.ChildRemoved:Connect(function(child)
+            Hub:Connect(conveyor.ChildRemoved, function(child)
                 local noteData = activeNotes[child]
                 if noteData then
                     if noteData.Pressed and not noteData.Released then
@@ -101,7 +103,7 @@ local function setupMinigame(bottom)
         end
     end
 
-    renderConnection = RunService.Heartbeat:Connect(function()
+    renderConnection = Hub:Connect(RunService.Heartbeat, function()
         if not autoPlayEnabled then return end
 
         for note, data in pairs(activeNotes) do

@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Prison Life")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 local section = Hub.Tabs.Game:CreateSection("Combat")
 local preferences = {}
 preferences.FOV_Size = 100
@@ -23,7 +25,7 @@ fov_circle.Position = user_input_service:GetMouseLocation()
 fov_circle.Visible = true
 fov_circle.Color = Color3.fromRGB(255, 255, 255)
 fov_circle.Radius = preferences.FOV_Size
-current:Connect(current, run_service.Heartbeat, function() fov_circle.Radius = preferences.FOV_Size end)
+current:Connect(run_service.Heartbeat, function() fov_circle.Radius = preferences.FOV_Size end)
 fov_circle.Transparency = 1
 fov_circle.Filled = false
 fov_circle.NumSides = 64

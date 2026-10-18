@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Soccer Zero")
 local LelUI = Hub.Native
 local LelAPI = Hub:Interface("Rayfield")
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Workspace = game:GetService("Workspace")
 local Players = game:GetService("Players")
@@ -288,7 +290,7 @@ local function ApplyGoalAssist()
     end
 end
 
-RunService.RenderStepped:Connect(function()
+Hub:Connect(RunService.RenderStepped, function()
     local Character = Player.Character
     local RootPart = Character and Character:FindFirstChild("HumanoidRootPart")
     local Humanoid = Character and Character:FindFirstChild("Humanoid")
@@ -386,7 +388,7 @@ RunService.RenderStepped:Connect(function()
     UpdateBallESP()
 end)
 
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
+Hub:Connect(UserInputService.InputBegan, function(input, gameProcessed)
     if gameProcessed then return end 
     
     if input.KeyCode == Enum.KeyCode.Space and CFrameJumpEnabled then

@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("DOORS")
 local LelUI = Hub.Native
 local LelAPI = Hub:Interface("Obsidian")
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local repo = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
 local Library = LelAPI
@@ -300,7 +302,7 @@ local function UpdateESP()
     end
 end
 
-local connection = RunService.RenderStepped:Connect(UpdateESP)
+local connection = Hub:Connect(RunService.RenderStepped, UpdateESP)
 
 local MenuGroup = Tabs["UI Settings"]:AddLeftGroupbox("Menu")
 MenuGroup:AddButton("Unload", function()

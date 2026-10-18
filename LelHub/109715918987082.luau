@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Anime Waifu Card Collection")
 local LelUI = Hub.Native
 local LelAPI = Hub:Interface("Rayfield")
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local remotes = game:GetService("ReplicatedStorage"):WaitForChild("Remotes")
 local Players = game:GetService("Players")

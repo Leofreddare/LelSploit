@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Build a Brainrot")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 local storage = game:GetService("ReplicatedStorage")
 local section = Hub.Tabs.Game:CreateSection("Shop")
 local toolName, buildName, cash = "", "", 1000000

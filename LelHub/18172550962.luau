@@ -1,6 +1,8 @@
 local Hub = loadstring(game:HttpGetAsync("https://raw.githubusercontent.com/Leofreddare/LelSploit/main/LelHub/u.luau"))()("Pixel Blade")
 local LelUI = Hub.Native
 local Instance = LelUI.Instance
+local task = Hub:OwnedTasks()
+local spawn = task.spawn
 task.spawn(function()
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -34,7 +36,7 @@ if not swingRemote or not onHitRemote or not blockRemote then
 end
 
 
-local auraEnabled = true
+local auraEnabled = false
 local auraRadius = 100
 local AuraMode = "Nearest"
 local BurstCooldown = 5
@@ -152,7 +154,7 @@ task.spawn(function()
 end)
 
 
-RunService.Heartbeat:Connect(function()
+Hub:Connect(RunService.Heartbeat, function()
     if speedOn and hum and hum.Parent then 
         hum.WalkSpeed = speedValue 
     end
