@@ -43,7 +43,7 @@ local function installLelHubSpacing(window, connect)
         if object:IsA("UIPadding") then
             local frame = object.Parent
             if frame and frame:IsA("Frame") and frame.Parent and frame.Parent:IsA("TextButton") then
-                object.PaddingTop, object.PaddingBottom = UDim.new(0, 10), UDim.new(0, 10)
+                object.PaddingTop, object.PaddingBottom = UDim.new(0, 6), UDim.new(0, 6)
                 seen[object] = true
             end
             return
@@ -56,7 +56,17 @@ local function installLelHubSpacing(window, connect)
         local isSection = sectionRoot and sectionRoot.Parent and sectionRoot.Parent:IsA("ScrollingFrame") and sectionRoot.Parent.Parent == holder and container.Position.Y.Offset == 24
         if not isTab and not isSection then return end
         seen[object] = true
-        object.Padding = UDim.new(0, isTab and 8 or 4)
+        object.Padding = UDim.new(0, 2)
+        if isSection then
+            container.Position = UDim2.fromOffset(0, 34)
+            local heading = sectionRoot:FindFirstChildOfClass("TextLabel")
+            if heading then heading.Position = UDim2.fromOffset(0, 12) end
+            local function resizeSection()
+                sectionRoot.Size = UDim2.new(1, 0, 0, object.AbsoluteContentSize.Y + 35)
+            end
+            connect(object:GetPropertyChangedSignal("AbsoluteContentSize"), resizeSection)
+            resizeSection()
+        end
         if isTab then
             local padding = container:FindFirstChildOfClass("UIPadding")
             if padding then
@@ -478,6 +488,212 @@ local function installLelHubReviewedFeatures(library, window, configuration)
     end
 end
 
+local function installLelHubExpandedTools(library, window, configuration)
+    local players = game:GetService("Players")
+    local player = players.LocalPlayer
+    local runService = game:GetService("RunService")
+    local input = game:GetService("UserInputService")
+    local lighting = game:GetService("Lighting")
+    local connections, restores, resources = {}, {}, {}
+    local stopped, serial = false, 0
+    local baselines = setmetatable({}, { __mode = "k" })
+    local function connect(signal, callback)
+        local connection = signal:Connect(function(...) if not stopped then callback(...) end end)
+        table.insert(connections, connection)
+        return connection
+    end
+    local function notify(message) library:Notify({ Title = "LelHub", Content = message, Duration = 4 }) end
+    local function control(parent, kind, title, default, callback, values, maximum)
+        if kind == "Slider" then callback, values, maximum = maximum, callback, values end
+        serial = serial + 1
+        local options = { Title = title, Default = default }
+        if kind == "Slider" then options.Min, options.Max, options.Rounding = values, maximum, 2 end
+        if kind == "Dropdown" then options.Values, options.Multi = values, false end
+        local item = parent["Create" .. kind](parent, "LelExpanded_" .. serial, options)
+        local initializing = true
+        item:OnChanged(function(value) if not initializing and not stopped then callback(value) end end)
+        initializing = false
+        return item
+    end
+    local function button(parent, title, callback)
+        parent:CreateButton({ Title = title, Callback = function()
+            if stopped then return end
+            local ok, result = pcall(callback)
+            if not ok then notify("That action is unavailable right now.") elseif type(result) == "string" then notify(result) end
+        end })
+    end
+    local function rootOf(character) return character and character:FindFirstChild("HumanoidRootPart") end
+    local function humanoid() return player.Character and player.Character:FindFirstChildOfClass("Humanoid") end
+    local function teleport(frame)
+        local root, human = rootOf(player.Character), humanoid()
+        if not root or not human or human.Health <= 0 then return end
+        if human.SeatPart then return "Leave your seat first." end
+        root.CFrame = frame
+        root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+    end
+    local function remember(object, property)
+        restores[object] = restores[object] or {}
+        if restores[object][property] == nil then
+            local saved = baselines[object] and baselines[object][property]
+            if saved then restores[object][property] = { saved[1] } else restores[object][property] = { object[property] } end
+        end
+    end
+    local function restore(object)
+        for property, value in pairs(restores[object] or {}) do pcall(function() object[property] = value[1] end) end
+        restores[object] = nil
+    end
+    local human = humanoid()
+    if human then baselines[human] = { JumpHeight = { human.JumpHeight }, UseJumpPower = { human.UseJumpPower }, MaxSlopeAngle = { human.MaxSlopeAngle } } end
+    baselines[lighting] = {}
+    for _, property in ipairs({ "FogStart", "FogEnd", "ClockTime", "Brightness", "GlobalShadows" }) do baselines[lighting][property] = { lighting[property] } end
+    baselines[workspace] = { Gravity = { workspace.Gravity } }
+    local playerTab = configuration.ExpandedPlayerTab or window:CreateTab({ Title = "Player", Icon = "user" })
+    local jumping = playerTab:CreateSection("Jumping")
+    local bunnyHop, jumpHeight, slope = false, nil, nil
+    local resetting = false
+    local bunnyControl = control(jumping, "Toggle", "Bunny Hop", false, function(value) bunnyHop = value end)
+    local heightControl = control(jumping, "Slider", "JumpHeight", 7.2, 0, 100, function(value)
+        if resetting then return end
+        jumpHeight = value
+        local human = humanoid()
+        if human then remember(human, "JumpHeight") remember(human, "UseJumpPower") human.UseJumpPower = false human.JumpHeight = value end
+    end)
+    local slopeControl = control(jumping, "Slider", "Max Slope Angle", 89, 0, 89, function(value)
+        if resetting then return end
+        slope = value
+        local human = humanoid()
+        if human then remember(human, "MaxSlopeAngle") human.MaxSlopeAngle = value end
+    end)
+    button(jumping, "Reset Jump Settings", function()
+        bunnyHop, jumpHeight, slope = false, nil, nil
+        bunnyControl:SetValue(false)
+        for object, values in pairs(restores) do if values.JumpHeight or values.MaxSlopeAngle then restore(object) end end
+        local human = humanoid()
+        if human then
+            resetting = true
+            heightControl:SetValue(human.JumpHeight)
+            slopeControl:SetValue(human.MaxSlopeAngle)
+            resetting = false
+        end
+    end)
+    local tools = playerTab:CreateSection("Tools")
+    local autoUse, useDelay, lastUse = false, 0.5, 0
+    local function heldTool() return player.Character and player.Character:FindFirstChildOfClass("Tool") end
+    control(tools, "Toggle", "Auto Use Tool", false, function(value) autoUse = value end)
+    control(tools, "Slider", "Use Interval", 0.5, 0.1, 5, function(value) useDelay = value end)
+    button(tools, "Use Held Tool", function() local tool = heldTool() if tool then tool:Activate() end end)
+    button(tools, "Equip All Tools", function()
+        local backpack = player:FindFirstChildOfClass("Backpack")
+        if backpack and player.Character then for _, tool in ipairs(backpack:GetChildren()) do if tool:IsA("Tool") then tool.Parent = player.Character end end end
+    end)
+    button(tools, "Unequip Tools", function() local human = humanoid() if human then human:UnequipTools() end end)
+    local navigation = playerTab:CreateSection("Navigation")
+    local clickTeleport = false
+    control(navigation, "Toggle", "Ctrl Click Teleport", false, function(value) clickTeleport = value end)
+    button(navigation, "Stop Velocity", function()
+        local root = rootOf(player.Character)
+        if root then root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero end
+    end)
+    connect(input.InputBegan, function(key, processed)
+        if not processed and clickTeleport and key.UserInputType == Enum.UserInputType.MouseButton1 and input:IsKeyDown(Enum.KeyCode.LeftControl) then teleport(player:GetMouse().Hit + Vector3.new(0, 3, 0)) end
+    end)
+    connect(player.CharacterAdded, function(character)
+        local human = character:WaitForChild("Humanoid", 10)
+        if not human or stopped then return end
+        if jumpHeight then remember(human, "JumpHeight") remember(human, "UseJumpPower") human.UseJumpPower = false human.JumpHeight = jumpHeight end
+        if slope then remember(human, "MaxSlopeAngle") human.MaxSlopeAngle = slope end
+    end)
+    local playersTab = configuration.ExpandedPlayersTab or window:CreateTab({ Title = "Players", Icon = "users" })
+    local selected, follow, orbit, orbitRadius, followDistance, angle = nil, false, false, 8, 5, 0
+    local targetSection = playersTab:CreateSection("Target Actions")
+    local names, targetDropdown = { "None" }, nil
+    local function refresh(leaving)
+        names = { "None" }
+        for _, target in ipairs(players:GetPlayers()) do if target ~= player and target ~= leaving then table.insert(names, target.Name) end end
+        table.sort(names)
+        if targetDropdown then targetDropdown:SetValues(names) end
+        if selected == leaving then selected, follow, orbit = nil, false, false end
+    end
+    refresh()
+    targetDropdown = control(targetSection, "Dropdown", "Target", "None", function(value) selected = players:FindFirstChild(value) end, names)
+    control(targetSection, "Toggle", "Follow", false, function(value) follow = value end)
+    control(targetSection, "Slider", "Follow Distance", 5, 2, 30, function(value) followDistance = value end)
+    control(targetSection, "Toggle", "Orbit", false, function(value) orbit = value end)
+    control(targetSection, "Slider", "Orbit Radius", 8, 3, 40, function(value) orbitRadius = value end)
+    button(targetSection, "Teleport Behind Target", function()
+        local root = selected and rootOf(selected.Character)
+        if root then return teleport(root.CFrame * CFrame.new(0, 0, followDistance)) end
+        return "Select an available target."
+    end)
+    button(targetSection, "Copy Username", function() if selected and setclipboard then setclipboard(selected.Name) end end)
+    button(targetSection, "Copy User ID", function() if selected and setclipboard then setclipboard(tostring(selected.UserId)) end end)
+    connect(players.PlayerAdded, function() refresh() end)
+    connect(players.PlayerRemoving, refresh)
+    local world = window:CreateTab({ Title = "Environment", Icon = "sun" })
+    local scene = world:CreateSection("Lighting")
+    local noFog, noEffects, noParticles = false, false, false
+    control(scene, "Toggle", "No Fog", false, function(value)
+        noFog = value
+        if value then remember(lighting, "FogStart") remember(lighting, "FogEnd") lighting.FogStart, lighting.FogEnd = 0, 1000000
+        else for object in pairs(restores) do if object:IsA("Atmosphere") then restore(object) end end for _, property in ipairs({ "FogStart", "FogEnd" }) do if restores[lighting] and restores[lighting][property] then lighting[property] = restores[lighting][property][1] restores[lighting][property] = nil end end end
+    end)
+    local function effect(object)
+        if noEffects and object:IsA("PostEffect") then remember(object, "Enabled") object.Enabled = false end
+        if noFog and object:IsA("Atmosphere") then remember(object, "Density") object.Density = 0 end
+        if noParticles and (object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam")) then remember(object, "Enabled") object.Enabled = false end
+    end
+    control(scene, "Toggle", "No Post Effects", false, function(value)
+        noEffects = value
+        if value then for _, object in ipairs(lighting:GetDescendants()) do effect(object) end local camera = workspace.CurrentCamera if camera then for _, object in ipairs(camera:GetDescendants()) do effect(object) end end
+        else for object in pairs(restores) do if object:IsA("PostEffect") then restore(object) end end end
+    end)
+    control(scene, "Slider", "Time of Day", lighting.ClockTime, 0, 24, function(value) remember(lighting, "ClockTime") lighting.ClockTime = value end)
+    control(scene, "Slider", "Brightness", lighting.Brightness, 0, 10, function(value) remember(lighting, "Brightness") lighting.Brightness = value end)
+    control(scene, "Toggle", "No Shadows", false, function(value) remember(lighting, "GlobalShadows") if value then lighting.GlobalShadows = false else lighting.GlobalShadows = restores[lighting].GlobalShadows[1] end end)
+    button(scene, "Reset Lighting", function()
+        noFog, noEffects = false, false
+        restore(lighting)
+        for object in pairs(restores) do if object:IsA("Atmosphere") or object:IsA("PostEffect") then restore(object) end end
+    end)
+    local physics = world:CreateSection("Physics")
+    control(physics, "Slider", "Gravity", workspace.Gravity, 0, 500, function(value) remember(workspace, "Gravity") workspace.Gravity = value end)
+    button(physics, "Reset Gravity", function() restore(workspace) end)
+    local performance = world:CreateSection("Effects")
+    control(performance, "Toggle", "Hide Particles", false, function(value)
+        noParticles = value
+        if value then for _, object in ipairs(workspace:GetDescendants()) do effect(object) end
+        else for object in pairs(restores) do if object:IsA("ParticleEmitter") or object:IsA("Trail") or object:IsA("Beam") then restore(object) end end end
+    end)
+    connect(workspace.DescendantAdded, effect)
+    connect(lighting.DescendantAdded, effect)
+    local elapsed = 0
+    connect(runService.Heartbeat, function(delta)
+        elapsed = elapsed + delta
+        if elapsed < 0.1 then return end
+        local step = elapsed
+        elapsed = 0
+        local human, root = humanoid(), rootOf(player.Character)
+        if bunnyHop and human and human.FloorMaterial ~= Enum.Material.Air then human.Jump = true end
+        if autoUse and os.clock() - lastUse >= useDelay then lastUse = os.clock() local tool = heldTool() if tool then pcall(function() tool:Activate() end) end end
+        local other = selected and rootOf(selected.Character)
+        if other and root and human and not human.SeatPart and human.Health > 0 then
+            if orbit then
+                angle = angle + step
+                teleport(CFrame.new(other.Position + Vector3.new(math.cos(angle) * orbitRadius, 0, math.sin(angle) * orbitRadius), other.Position))
+            elseif follow and (root.Position - other.Position).Magnitude > followDistance then human:MoveTo((other.CFrame * CFrame.new(0, 0, followDistance)).Position) end
+        end
+        if noFog then lighting.FogEnd = 1000000 for _, object in ipairs(lighting:GetChildren()) do if object:IsA("Atmosphere") then effect(object) end end end
+    end)
+    return function()
+        if stopped then return end
+        stopped = true
+        if follow then local human = humanoid() if human then human:Move(Vector3.zero) end end
+        for _, connection in ipairs(connections) do connection:Disconnect() end
+        for object in pairs(restores) do restore(object) end
+        for _, object in ipairs(resources) do object:Destroy() end
+    end
+end
+
 local function installLelHubControls(library, window, configuration)
     local players = game:GetService("Players")
     local player = players.LocalPlayer
@@ -487,6 +703,7 @@ local function installLelHubControls(library, window, configuration)
     local http = game:GetService("HttpService")
     local connections = {}
     local reviewedCleanup = installLelHubReviewedFeatures(library, window, configuration)
+    local expandedCleanup
     local controls = {}
     local state = { Sprint = false, SprintSpeed = 32, AutoWalk = false, NoSit = false, Spin = false, SpinSpeed = 90, HideAccessories = false }
     local originals = setmetatable({}, { __mode = "k" })
@@ -995,6 +1212,7 @@ local function installLelHubControls(library, window, configuration)
             tool.Parent = backpack
         end)
         local playersTab = ui(window, "Tab", { Title = "Players", Icon = "users" })
+        configuration.ExpandedPlayersTab = playersTab
         local names = { "Select a player" }
         local playerDropdown
         local function refreshPlayers(leaving)
@@ -1102,6 +1320,9 @@ local function installLelHubControls(library, window, configuration)
             end
         end
     end)
+
+    configuration.ExpandedPlayerTab = utilityTab
+    expandedCleanup = installLelHubExpandedTools(library, window, configuration)
 
     local settingsTab = configuration.SettingsTab or ui(window, "Tab", { Title = "Settings", Icon = "settings" })
     local appearance = ui(settingsTab, "Section", "Appearance")
@@ -1230,9 +1451,9 @@ local function installLelHubControls(library, window, configuration)
     local moduleSection = ui(settingsTab, "Section", "Hubs")
     local moduleEnvironment = type(getgenv) == "function" and getgenv() or _G
     local catalog = moduleEnvironment.LelHubCatalog or {
-        { Name = "Global", File = "0.luau" },
-        { Name = "Universal Enhancements", File = "10.luau" },
-        { Name = "Client Tools", File = "11.luau" },
+        { Name = "Global", File = "global.luau" },
+        { Name = "Universal Enhancements", File = "universal.luau" },
+        { Name = "Client Tools", File = "client.luau" },
     }
     local moduleNames, moduleFiles = {}, {}
     for _, entry in ipairs(catalog) do
@@ -1286,6 +1507,7 @@ local function installLelHubControls(library, window, configuration)
         end
 
         if reviewedCleanup then reviewedCleanup() end
+        if expandedCleanup then expandedCleanup() end
         releaseSprint()
         releaseSpin()
         restoreSpectate()
@@ -1740,6 +1962,193 @@ local function createGameInterface(hub, style)
     return api
 end
 
+local function installLelHubGameObjects(hub)
+    local tab = hub.Tabs.Game or hub:Tab("Game")
+    local section = tab:CreateSection("Game Objects")
+    local player = game:GetService("Players").LocalPlayer
+    local kind, query, selected, range, enabled = "NPCs", "", nil, 1000, false
+    local entries, markers = {}, {}
+    local function root() return player.Character and player.Character:FindFirstChild("HumanoidRootPart") end
+    local function physical(object)
+        if object:IsA("BasePart") then return object end
+        if object:IsA("Attachment") then return object:FindFirstAncestorWhichIsA("BasePart") end
+        if object:IsA("Model") then return object.PrimaryPart or object:FindFirstChild("HumanoidRootPart") or object:FindFirstChildWhichIsA("BasePart", true) end
+        if object:IsA("ProximityPrompt") or object:IsA("TouchTransmitter") then return object.Parent and physical(object.Parent) end
+        if object:IsA("Tool") then return object:FindFirstChild("Handle") end
+    end
+    local function clear()
+        for object, marker in pairs(markers) do marker:Destroy() markers[object] = nil end
+    end
+    local targetControl
+    local function scan()
+        clear()
+        entries, selected = {}, nil
+        local names = { "None" }
+        for _, object in ipairs(workspace:GetDescendants()) do
+            local matches = kind == "NPCs" and object:IsA("Model") and object:FindFirstChildOfClass("Humanoid") and not game:GetService("Players"):GetPlayerFromCharacter(object)
+                or kind == "Tools" and object:IsA("Tool")
+                or kind == "Prompts" and object:IsA("ProximityPrompt")
+                or kind == "Touch Parts" and object:IsA("TouchTransmitter")
+                or kind == "Seats" and (object:IsA("Seat") or object:IsA("VehicleSeat"))
+            if matches and physical(object) and (query == "" or object:GetFullName():lower():find(query, 1, true)) then
+                local label = object:GetFullName()
+                local unique, number = label, 1
+                while entries[unique] do number = number + 1 unique = label .. " (" .. number .. ")" end
+                entries[unique] = object
+                table.insert(names, unique)
+            end
+        end
+        table.sort(names)
+        targetControl:SetValues(names)
+        targetControl:SetValue("None")
+        if #names == 1 then hub:Notify("No matching objects are currently loaded.") end
+    end
+    hub:Dropdown(section, "ObjectKind", "Object Type", { "NPCs", "Tools", "Prompts", "Touch Parts", "Seats" }, kind, function(value) kind = value entries, selected = {}, nil clear() end)
+    local initializing = true
+    local filter = section:CreateInput("LelObjectFilter", { Title = "Name Filter", Default = "", Finished = true })
+    filter:OnChanged(function(value) if not initializing then query = tostring(value):lower() end end)
+    initializing = false
+    hub:Button(section, "Refresh Objects", scan)
+    targetControl = hub:Dropdown(section, "ObjectTarget", "Object", { "None" }, "None", function(value) selected = entries[value] end)
+    local function nearest()
+        local myRoot, best, distance = root(), nil, math.huge
+        if not myRoot then return end
+        for _, object in pairs(entries) do
+            local part = object.Parent and physical(object)
+            if part then local gap = (part.Position - myRoot.Position).Magnitude if gap < distance then best, distance = object, gap end end
+        end
+        return best
+    end
+    hub:Button(section, "Select Nearest Object", function()
+        local object = nearest()
+        for name, candidate in pairs(entries) do if candidate == object then targetControl:SetValue(name) return end end
+        hub:Notify("Refresh objects first.")
+    end)
+    hub:Button(section, "Teleport to Object", function()
+        local myRoot, part = root(), selected and selected.Parent and physical(selected)
+        local human = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        if human and human.SeatPart then hub:Notify("Leave your seat first.") return end
+        if myRoot and part then myRoot.CFrame = part.CFrame * CFrame.new(0, 3, 4) myRoot.AssemblyLinearVelocity = Vector3.zero end
+    end)
+    hub:Button(section, "Interact with Prompt", function()
+        local prompt = selected and selected:IsA("ProximityPrompt") and selected
+        local myRoot, part = root(), prompt and physical(prompt)
+        if not prompt or not prompt.Enabled or not part or not myRoot then hub:Notify("Select an enabled prompt.") return end
+        if (part.Position - myRoot.Position).Magnitude > prompt.MaxActivationDistance then hub:Notify("Move closer to the prompt.") return end
+        if type(fireproximityprompt) == "function" then fireproximityprompt(prompt, prompt.HoldDuration)
+        else
+            prompt:InputHoldBegin()
+            local thread = task.delay(prompt.HoldDuration + 0.05, function() pcall(function() prompt:InputHoldEnd() end) end)
+            hub:Add(function() pcall(task.cancel, thread) pcall(function() prompt:InputHoldEnd() end) end)
+        end
+    end)
+    hub:Toggle(section, "ObjectESP", "Object ESP", function(value) enabled = value if not value then clear() end end, false)
+    hub:Slider(section, "ObjectESPRange", "ESP Distance", range, 50, 5000, function(value) range = value end)
+    local elapsed = 0
+    hub:Connect(game:GetService("RunService").Heartbeat, function(delta)
+        elapsed = elapsed + delta
+        if elapsed < 0.25 then return end
+        elapsed = 0
+        if not enabled then return end
+        local myRoot = root()
+        for _, object in pairs(entries) do
+            local part = object.Parent and physical(object)
+            local visible = part and myRoot and (part.Position - myRoot.Position).Magnitude <= range
+            if not visible and markers[object] then markers[object]:Destroy() markers[object] = nil
+            elseif visible and not markers[object] then
+                local marker = Instance.new("Highlight")
+                marker.Name, marker.Adornee = "LelHubObjectESP", object:IsA("Model") and object or part
+                marker.FillTransparency, marker.OutlineColor = 0.85, Color3.fromRGB(125, 180, 255)
+                marker.DepthMode, marker.Parent = Enum.HighlightDepthMode.AlwaysOnTop, part
+                markers[object] = marker
+            end
+        end
+    end)
+    hub:Add(clear)
+end
+
+local function installLelHubLifecycle(hub)
+    function hub:Loop(section, title, interval, callback)
+        local enabled, busy, elapsed = false, false, 0
+        local worker
+        local toggle = self:Toggle(section, "Loop_" .. title, title, function(value)
+            enabled = value
+            elapsed = 0
+            if not value and worker then pcall(task.cancel, worker) worker, busy = nil, false end
+        end, false)
+        self:Connect(game:GetService("RunService").Heartbeat, function(delta)
+            elapsed = elapsed + delta
+            if not enabled or busy or elapsed < interval() then return end
+            busy, elapsed = true, 0
+            worker = task.spawn(function()
+                local ok = pcall(callback)
+                busy, worker = false, nil
+                if not ok and enabled then toggle:SetValue(false) self:Notify(title .. " is unavailable in the current game state.") end
+            end)
+        end)
+        self:Add(function() enabled = false if worker then pcall(task.cancel, worker) end end)
+        return toggle
+    end
+    function hub:SourceController(section, title, callback, oneShot)
+        local session
+        local function stop()
+            if not session then return end
+            session.Active = false
+            for _, thread in ipairs(session.Threads) do if thread ~= coroutine.running() and coroutine.status(thread) ~= "dead" then pcall(task.cancel, thread) end end
+            for _, connection in ipairs(session.Connections) do pcall(function() connection:Disconnect() end) end
+            for index = #session.Cleanup, 1, -1 do pcall(session.Cleanup[index]) end
+            session = nil
+        end
+        local toggle
+        local function start(value)
+            stop()
+            if not value then return end
+            local current = { Active = true, Threads = {}, Connections = {}, Cleanup = {} }
+            session = current
+            function current:Add(cleanup) table.insert(self.Cleanup, cleanup) end
+            function current:Connect(signal, handler)
+                local connection = signal:Connect(function(...) if self.Active then handler(...) end end)
+                table.insert(self.Connections, connection)
+                return connection
+            end
+            local function launch(delay, handler, ...)
+                for index = #current.Threads, 1, -1 do if coroutine.status(current.Threads[index]) == "dead" then table.remove(current.Threads, index) end end
+                local args = table.pack(...)
+                local thread = task.delay(delay, function()
+                    if not current.Active then return end
+                    local ok = pcall(handler, table.unpack(args, 1, args.n))
+                    if not ok and current.Active then if toggle then toggle:SetValue(false) else stop() end hub:Notify(title .. " is unavailable in this game state or executor.") end
+                end)
+                table.insert(current.Threads, thread)
+                return thread
+            end
+            local tasks = setmetatable({
+                spawn = function(handler, ...) return launch(0, handler, ...) end,
+                defer = function(handler, ...) return launch(0, handler, ...) end,
+                delay = launch,
+            }, { __index = task })
+            local function hook(target, replacement)
+                local original = hookfunction(target, replacement)
+                current:Add(function() hookfunction(target, original) end)
+                return original
+            end
+            local function meta(object, method, replacement)
+                local original = hookmetamethod(object, method, replacement)
+                current:Add(function() hookmetamethod(object, method, original) end)
+                return original
+            end
+            tasks.spawn(callback, current, tasks, hook, meta)
+        end
+        if oneShot then
+            self:Button(section, title == "Client Compatibility" and "Install Client Compatibility" or title, function() if not session then start(true) end end)
+        else
+            toggle = self:Toggle(section, "Source_" .. title, title, start, false)
+        end
+        self:Add(stop)
+        return toggle
+    end
+end
+
 local function installNativeUI(hub)
     local native = { Objects = {}, Roots = {}, Groups = {}, Controls = {}, Bindings = {}, Sequence = 0 }
     local gameTab = hub.Tabs.Game or hub:Tab("Game", "gamepad-2")
@@ -1871,6 +2280,8 @@ return function(name)
     function hub:Input(title, default, callback)
         return self.Native:Control(nil, "Input", title, default, callback)
     end
+    installLelHubLifecycle(hub)
+    installLelHubGameObjects(hub)
     hub:Finish()
     return hub
 end
