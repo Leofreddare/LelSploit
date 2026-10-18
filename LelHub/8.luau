@@ -39,7 +39,16 @@ local function installLelHubSpacing(window, connect)
     if typeof(holder) ~= "Instance" then return end
     local seen = {}
     local function style(object)
-        if seen[object] or not object:IsA("UIListLayout") then return end
+        if seen[object] then return end
+        if object:IsA("UIPadding") then
+            local frame = object.Parent
+            if frame and frame:IsA("Frame") and frame.Parent and frame.Parent:IsA("TextButton") then
+                object.PaddingTop, object.PaddingBottom = UDim.new(0, 10), UDim.new(0, 10)
+                seen[object] = true
+            end
+            return
+        end
+        if not object:IsA("UIListLayout") then return end
         local container = object.Parent
         if not container then return end
         local isTab = container:IsA("ScrollingFrame") and container.Parent == holder
@@ -47,7 +56,7 @@ local function installLelHubSpacing(window, connect)
         local isSection = sectionRoot and sectionRoot.Parent and sectionRoot.Parent:IsA("ScrollingFrame") and sectionRoot.Parent.Parent == holder and container.Position.Y.Offset == 24
         if not isTab and not isSection then return end
         seen[object] = true
-        object.Padding = UDim.new(0, 10)
+        object.Padding = UDim.new(0, isTab and 8 or 4)
         if isTab then
             local padding = container:FindFirstChildOfClass("UIPadding")
             if padding then
@@ -63,8 +72,410 @@ local function installLelHubSpacing(window, connect)
     end
     for _, object in ipairs(holder:GetDescendants()) do style(object) end
     connect(holder.DescendantAdded, function(object)
-        if object:IsA("UIListLayout") then task.defer(function() if object.Parent then style(object) end end) end
+        if object:IsA("UIListLayout") or object:IsA("UIPadding") then task.defer(function() if object.Parent then style(object) end end) end
     end)
+end
+
+local function installLelHubReviewedFeatures(library, window, configuration)
+    local name = tostring(configuration.Name or ""):lower():gsub("[^a-z0-9]", "")
+    if name == "kukirin" then name = "driveakukirin" end
+    local supported = { driveakukirin = true, fixitup = true, prisonlife = true, slapbattles = true, cropincremental = true, doors = true, splitthesea = true }
+    if not supported[name] then return end
+    local players = game:GetService("Players")
+    local player = players.LocalPlayer
+    local runService = game:GetService("RunService")
+    local connections, resources, threads = {}, {}, {}
+    local stopped, sequence = false, 0
+    local function connect(event, callback)
+        local connection = event:Connect(function(...) if not stopped then callback(...) end end)
+        table.insert(connections, connection)
+        return connection
+    end
+    local function notify(message)
+        if not stopped then library:Notify({ Title = lelHubTitle("LelHub"), Content = message, Duration = 4 }) end
+    end
+    local function rootPart()
+        local character = player.Character
+        local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+        local root = character and character:FindFirstChild("HumanoidRootPart")
+        if humanoid and humanoid.Health > 0 and root then return root, humanoid end
+    end
+    local function teleport(frame)
+        local root, humanoid = rootPart()
+        if not root then return false end
+        if humanoid.SeatPart then notify("Leave your vehicle first.") return false end
+        root.CFrame = frame
+        root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+        return true
+    end
+    local function launch(callback)
+        for index = #threads, 1, -1 do if coroutine.status(threads[index]) == "dead" then table.remove(threads, index) end end
+        local thread = task.spawn(function()
+            local success = pcall(callback)
+            if not success and not stopped then notify("That action could not complete.") end
+        end)
+        table.insert(threads, thread)
+    end
+    local function control(parent, kind, title, default, callback, minimum, maximum)
+        sequence = sequence + 1
+        local settings = { Title = lelHubTitle(title), Default = default }
+        if kind == "Slider" then settings.Min, settings.Max, settings.Rounding = minimum, maximum, 2 end
+        if kind == "Dropdown" then settings.Values, settings.Multi = minimum, false end
+        local item = parent["Create" .. kind](parent, "LelReviewed_" .. name .. "_" .. sequence, settings)
+        local initializing = true
+        item:OnChanged(function(value) if not initializing and not stopped then callback(value, item) end end)
+        initializing = false
+        return item
+    end
+    local function button(parent, title, callback)
+        parent:CreateButton({ Title = lelHubTitle(title), Callback = function() if not stopped then launch(callback) end end })
+    end
+    local function physical(object)
+        if object:IsA("BasePart") then return object end
+        if object:IsA("Model") then return object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true) end
+    end
+    local function marker(object, color)
+        local highlight = Instance.new("Highlight")
+        highlight.Name, highlight.Adornee, highlight.Parent = "LelHubItemESP", object, object
+        highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+        highlight.FillTransparency, highlight.OutlineTransparency = 0.8, 0
+        highlight.FillColor, highlight.OutlineColor = color, color
+        resources[highlight] = true
+        return highlight
+    end
+    if name == "driveakukirin" then
+        local section = window:CreateTab({ Title = lelHubTitle("Collectibles"), Icon = "map-pin" }):CreateSection("Pumpkins")
+        local enabled, delay, elapsed, nextMove = false, 1, 0, 0
+        local candidates, visited = {}, setmetatable({}, { __mode = "k" })
+        local function index(object)
+            if (object:IsA("BasePart") or object:IsA("Model")) and object.Name:lower():find("pumpkin", 1, true) then
+                local model = object:IsA("Model") and object or object:FindFirstAncestorOfClass("Model")
+                if model and model:FindFirstChildOfClass("Humanoid") then return end
+                candidates[object] = true
+            end
+        end
+        local function scan()
+            for _, object in ipairs(workspace:GetDescendants()) do index(object) end
+        end
+        local function nearest()
+            local root = rootPart()
+            if not root then return end
+            local best, bestPart, distance
+            for object in pairs(candidates) do
+                if not object:IsDescendantOf(workspace) then candidates[object] = nil
+                elseif not visited[object] then
+                    local part = physical(object)
+                    if part then
+                        local current = (root.Position - part.Position).Magnitude
+                        if not distance or current < distance then best, bestPart, distance = object, part, current end
+                    end
+                end
+            end
+            return best, bestPart
+        end
+        local function visit()
+            local object, part = nearest()
+            if not part then return false end
+            if teleport(part.CFrame + Vector3.new(0, 3, 0)) then
+                visited[object] = true
+                local parent = object.Parent
+                while parent and parent ~= workspace do
+                    if candidates[parent] then visited[parent] = true end
+                    parent = parent.Parent
+                end
+                for _, descendant in ipairs(object:GetDescendants()) do if candidates[descendant] then visited[descendant] = true end end
+                return true
+            end
+        end
+        control(section, "Toggle", "Auto Pumpkin TP", false, function(value) enabled = value if value then scan() nextMove = elapsed end end)
+        control(section, "Slider", "Teleport Interval", 1, function(value) delay = value end, 0.5, 5)
+        button(section, "Teleport to Next Pumpkin", function() scan() if not visit() then notify("No unvisited pumpkin found.") end end)
+        button(section, "Reset Pumpkin Route", function() visited = setmetatable({}, { __mode = "k" }) scan() end)
+        connect(workspace.DescendantAdded, index)
+        connect(runService.Heartbeat, function(delta)
+            if not enabled then return end
+            elapsed = elapsed + delta
+            if elapsed < nextMove then return end
+            nextMove = elapsed + delay
+            visit()
+        end)
+    elseif name == "fixitup" then
+        local section = window:CreateTab({ Title = lelHubTitle("Event Items"), Icon = "package" }):CreateSection("EventFolder")
+        local enabled, range, elapsed = false, 300, 0
+        local markers = {}
+        local function clear()
+            for object, highlight in pairs(markers) do resources[highlight] = nil highlight:Destroy() markers[object] = nil end
+        end
+        local function items()
+            local folder = workspace:FindFirstChild("EventFolder")
+            return folder and folder:GetDescendants() or {}
+        end
+        control(section, "Toggle", "Event Item ESP", false, function(value) enabled = value if not value then clear() end end)
+        control(section, "Slider", "ESP Range", 300, function(value) range = value end, 25, 1500)
+        button(section, "Teleport to Nearest Event Item", function()
+            local root = rootPart()
+            if not root then return end
+            local nearest, distance
+            for _, part in ipairs(items()) do
+                if part:IsA("BasePart") then
+                    local current = (root.Position - part.Position).Magnitude
+                    if current <= range and (not distance or current < distance) then nearest, distance = part, current end
+                end
+            end
+            if nearest then teleport(nearest.CFrame + Vector3.new(0, 3, 0)) else notify("No event item found in range.") end
+        end)
+        connect(runService.Heartbeat, function(delta)
+            elapsed = elapsed + delta
+            if elapsed < 0.4 then return end
+            elapsed = 0
+            if not enabled then return end
+            local root = rootPart()
+            local live = {}
+            if root then
+                for _, part in ipairs(items()) do
+                    if part:IsA("BasePart") and (root.Position - part.Position).Magnitude <= range then
+                        live[part] = true
+                        if not markers[part] then markers[part] = marker(part, Color3.fromRGB(120, 170, 240)) end
+                    end
+                end
+            end
+            for part, highlight in pairs(markers) do
+                if not live[part] then resources[highlight] = nil highlight:Destroy() markers[part] = nil end
+            end
+        end)
+    elseif name == "prisonlife" then
+        local tab = window:CreateTab({ Title = lelHubTitle("Prison"), Icon = "map" })
+        local locations = tab:CreateSection("Locations")
+        local destinations = {
+            ["Yard"] = Vector3.new(779, 98, 2458), ["Cafeteria"] = Vector3.new(960, 100, 2320),
+            ["Kitchen"] = Vector3.new(905, 99, 2225), ["Cells"] = Vector3.new(918, 100, 2380),
+            ["Criminal Base"] = Vector3.new(-943, 94, 2063), ["Prison Roof"] = Vector3.new(825, 118, 2390),
+        }
+        local selected = "Yard"
+        control(locations, "Dropdown", "Destination", selected, function(value) selected = value end, { "Yard", "Cafeteria", "Kitchen", "Cells", "Criminal Base", "Prison Roof" })
+        button(locations, "Teleport", function() local position = destinations[selected] if position then teleport(CFrame.new(position)) end end)
+        local weapons = tab:CreateSection("Weapons")
+        local weapon, busy = "Remington 870", false
+        control(weapons, "Dropdown", "Weapon", weapon, function(value) weapon = value end, { "Remington 870", "M4A1", "AK-47" })
+        local function owned(value)
+            local backpack, character = player:FindFirstChildOfClass("Backpack"), player.Character
+            return (backpack and backpack:FindFirstChild(value)) or (character and character:FindFirstChild(value))
+        end
+        local function getWeapon(value)
+            if owned(value) then return true end
+            local folder = workspace:FindFirstChild("ITEM_SPAWNS") or workspace:FindFirstChild("Prison_ITEMS")
+            local remoteFolder = workspace:FindFirstChild("Remote")
+            local remote = remoteFolder and remoteFolder:FindFirstChild("ItemHandler")
+            local root = rootPart()
+            if not folder or not remote or not remote:IsA("RemoteFunction") or not root then notify("Weapon pickup is unavailable.") return end
+            local part
+            for _, object in ipairs(folder:GetDescendants()) do
+                if object.Name:lower():find(value:lower(), 1, true) then part = physical(object) if part then break end end
+            end
+            if not part then notify("Weapon spawn not found.") return end
+            local original = root.CFrame
+            if not teleport(part.CFrame + Vector3.new(0, 2, 0)) then return end
+            for _ = 1, 6 do
+                if stopped or not part.Parent or owned(value) then break end
+                pcall(function() remote:InvokeServer(part) end)
+                task.wait(0.2)
+            end
+            if not stopped and player.Character and root:IsDescendantOf(player.Character) then teleport(original) end
+            return owned(value) ~= nil
+        end
+        local function request(all)
+            if busy then return end
+            busy = true
+            local success = pcall(function()
+                if all then
+                    for _, value in ipairs({ "Remington 870", "M4A1", "AK-47" }) do if stopped then break end getWeapon(value) end
+                else getWeapon(weapon) end
+            end)
+            busy = false
+            if not success then notify("Weapon pickup could not complete.") end
+        end
+        button(weapons, "Get Weapon", function() request(false) end)
+        button(weapons, "Get All Weapons", function() request(true) end)
+    elseif name == "slapbattles" then
+        local section = window:CreateTab({ Title = lelHubTitle("Arena"), Icon = "shield" }):CreateSection("Anti Void")
+        local platform
+        control(section, "Toggle", "Anti Void", false, function(value)
+            if platform then resources[platform] = nil platform:Destroy() platform = nil end
+            if value then
+                platform = Instance.new("Part")
+                platform.Name, platform.Size, platform.Position = "LelHubAntiVoid", Vector3.new(4000, 3, 4000), Vector3.new(0, -9.75, 0)
+                platform.Anchored, platform.CanCollide, platform.Transparency = true, true, 0.9
+                platform.Parent = workspace
+                resources[platform] = true
+            end
+        end)
+    elseif name == "cropincremental" then
+        local section = window:CreateTab({ Title = lelHubTitle("Collector"), Icon = "leaf" }):CreateSection("Tokens")
+        local enabled, delay, elapsed, nextTouch = false, 0.1, 0, 0
+        local lastTouch = setmetatable({}, { __mode = "k" })
+        control(section, "Toggle", "Touch Collect", false, function(value, item)
+            if value and type(firetouchinterest) ~= "function" then notify("Touch collection is unavailable in this executor.") item:SetValue(false) return end
+            enabled = value
+        end)
+        control(section, "Slider", "Touch Interval", 0.1, function(value) delay = value end, 0.1, 2)
+        button(section, "Reset Token History", function() lastTouch = setmetatable({}, { __mode = "k" }) end)
+        connect(runService.Heartbeat, function(delta)
+            if not enabled then return end
+            elapsed = elapsed + delta
+            if elapsed < nextTouch then return end
+            nextTouch = elapsed + delay
+            local root = rootPart()
+            local folder = workspace:FindFirstChild("Tokens")
+            if not root or not folder then return end
+            for _, part in ipairs(folder:GetDescendants()) do
+                if part:IsA("BasePart") and part:FindFirstChildOfClass("TouchTransmitter") and (not lastTouch[part] or elapsed - lastTouch[part] >= 5) then
+                    lastTouch[part] = elapsed
+                    local success = pcall(firetouchinterest, root, part, 0)
+                    if success then pcall(firetouchinterest, root, part, 1) end
+                    break
+                end
+            end
+        end)
+    elseif name == "splitthesea" then
+        local section = window:CreateTab({ Title = lelHubTitle("Auto Farm"), Icon = "waves" }):CreateSection("Sea Farm")
+        local split, loot, sell, elapsed, nextSplit, nextLoot, nextSell = false, false, false, 0, 0, 0, 0
+        local interval, pendingSell = 4, nil
+        local touched = setmetatable({}, { __mode = "k" })
+        local moved = setmetatable({}, { __mode = "k" })
+        local function restoreLoot()
+            for part, frame in pairs(moved) do if part.Parent then part.CFrame = frame end moved[part] = nil end
+        end
+        resources[restoreLoot] = true
+        local function remote(value)
+            local folder = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+            local item = folder and folder:FindFirstChild(value)
+            return item and item:IsA("RemoteEvent") and item or nil
+        end
+        local function plot()
+            local islandName = player:GetAttribute("IslandName") or player:GetAttribute("CurrentIsland")
+            local plotName = player:GetAttribute("PlotName")
+            local islands = workspace:FindFirstChild("Islands")
+            local island = islandName and islands and islands:FindFirstChild(islandName)
+            local plots = island and island:FindFirstChild("Plots")
+            return plotName and plots and plots:FindFirstChild(plotName) or nil
+        end
+        local function sellAll()
+            local event = remote("SellRequest")
+            if event then event:FireServer({ Mode = "SellAll" }) else notify("Selling is unavailable.") end
+        end
+        control(section, "Toggle", "Auto Split", false, function(value) split = value if value then nextSplit = elapsed end end)
+        control(section, "Toggle", "Auto Loot", false, function(value) loot = value if not value then restoreLoot() end end)
+        control(section, "Toggle", "Auto Sell", false, function(value) sell = value nextSell = elapsed + interval end)
+        control(section, "Slider", "Split Interval", 4, function(value) interval = value end, 4, 30)
+        button(section, "Sell All", sellAll)
+        connect(runService.Heartbeat, function(delta)
+            elapsed = elapsed + delta
+            if split and elapsed >= nextSplit then
+                nextSplit = elapsed + interval
+                local owned = plot()
+                local event = remote("SplitRequest")
+                if owned and owned:GetAttribute("PlotBusy") ~= true and event then event:FireServer(1, true) pendingSell = elapsed + 3.5 end
+            end
+            if sell and ((pendingSell and elapsed >= pendingSell) or (not pendingSell and elapsed >= nextSell)) then
+                pendingSell = nil
+                nextSell = elapsed + interval
+                sellAll()
+            end
+            if not loot or elapsed < nextLoot then return end
+            nextLoot = elapsed + 0.3
+            local root = rootPart()
+            local folder = workspace:FindFirstChild("ActiveLoot")
+            if not root or not folder then return end
+            local plotName, count = player:GetAttribute("PlotName"), 0
+            for _, item in ipairs(folder:GetChildren()) do
+                local owner = item:GetAttribute("PlotName")
+                if (not owner or owner == plotName) and (not touched[item] or elapsed - touched[item] >= 2) then
+                    local event = item:GetAttribute("PickupType") == "Interact" and remote("InteractRequest")
+                    if event then event:FireServer(item.Name)
+                    else
+                        local part = physical(item)
+                        if part then
+                            if not moved[part] then moved[part] = part.CFrame end
+                            part.CFrame = root.CFrame
+                        end
+                    end
+                    touched[item] = elapsed
+                    count = count + 1
+                    if count >= 8 then break end
+                end
+            end
+        end)
+    elseif name == "doors" then
+        local section = window:CreateTab({ Title = lelHubTitle("Interactions"), Icon = "hand" }):CreateSection("Proximity Prompts")
+        local instant, auto, range, interval, elapsed, nextPrompt = false, false, 10, 0.4, 0, 0
+        local prompts, durations, holds = {}, {}, {}
+        local function add(object)
+            if object:IsA("ProximityPrompt") then
+                prompts[object] = true
+                if instant and durations[object] == nil then durations[object] = object.HoldDuration object.HoldDuration = 0 end
+            end
+        end
+        local function restore()
+            for prompt, duration in pairs(durations) do if prompt.Parent then prompt.HoldDuration = duration end durations[prompt] = nil end
+        end
+        resources[restore] = true
+        local function releaseHolds()
+            for prompt in pairs(holds) do pcall(function() prompt:InputHoldEnd() end) holds[prompt] = nil end
+        end
+        resources[releaseHolds] = true
+        control(section, "Toggle", "Instant Interact", false, function(value)
+            instant = value
+            if value then for _, object in ipairs(workspace:GetDescendants()) do add(object) end else restore() end
+        end)
+        control(section, "Toggle", "Auto Interact", false, function(value)
+            auto = value
+            if value then for _, object in ipairs(workspace:GetDescendants()) do add(object) end else releaseHolds() end
+        end)
+        control(section, "Slider", "Interact Range", 10, function(value) range = value end, 2, 20)
+        control(section, "Slider", "Interact Interval", 0.4, function(value) interval = value end, 0.2, 3)
+        connect(workspace.DescendantAdded, add)
+        connect(runService.Heartbeat, function(delta)
+            if not auto then return end
+            elapsed = elapsed + delta
+            if elapsed < nextPrompt then return end
+            nextPrompt = elapsed + interval
+            local root = rootPart()
+            if not root then return end
+            local best, distance
+            for prompt in pairs(prompts) do
+                if not prompt.Parent then prompts[prompt] = nil durations[prompt] = nil
+                elseif prompt.Enabled then
+                    local parent = prompt.Parent
+                    local position = parent:IsA("Attachment") and parent.WorldPosition or (physical(parent) and physical(parent).Position)
+                    if position then
+                        local current = (root.Position - position).Magnitude
+                        if current <= math.min(range, prompt.MaxActivationDistance) and (not distance or current < distance) then best, distance = prompt, current end
+                    end
+                end
+            end
+            if best then
+                nextPrompt = elapsed + math.max(interval, best.HoldDuration + 0.1)
+                launch(function()
+                    if stopped or not auto or not best.Parent or not best.Enabled then return end
+                    local duration = best.HoldDuration
+                    if type(fireproximityprompt) == "function" then fireproximityprompt(best, duration)
+                    else
+                        holds[best] = true
+                        best:InputHoldBegin()
+                        task.wait(duration)
+                        if holds[best] then pcall(function() best:InputHoldEnd() end) holds[best] = nil end
+                    end
+                end)
+            end
+        end)
+    end
+    return function()
+        if stopped then return end
+        stopped = true
+        for _, connection in ipairs(connections) do connection:Disconnect() end
+        for _, thread in ipairs(threads) do pcall(task.cancel, thread) end
+        for resource in pairs(resources) do pcall(function() if type(resource) == "function" then resource() else resource:Destroy() end end) end
+    end
 end
 
 local function installLelHubControls(library, window, configuration)
@@ -75,6 +486,7 @@ local function installLelHubControls(library, window, configuration)
     local tweenService = game:GetService("TweenService")
     local http = game:GetService("HttpService")
     local connections = {}
+    local reviewedCleanup = installLelHubReviewedFeatures(library, window, configuration)
     local controls = {}
     local state = { Sprint = false, SprintSpeed = 32, AutoWalk = false, NoSit = false, Spin = false, SpinSpeed = 90, HideAccessories = false }
     local originals = setmetatable({}, { __mode = "k" })
@@ -434,9 +846,7 @@ local function installLelHubControls(library, window, configuration)
     register(places, "Input", "WaypointName", { Title = lelHubTitle("Position name"), Default = "Home", Finished = true }, function(value)
         waypointName = tostring(value):sub(1, 40)
     end)
-    local waypointDropdown = register(places, "Dropdown", "Waypoint", { Title = lelHubTitle("Saved position"), Values = {}, Multi = false }, function(value)
-        selectedWaypoint = value
-    end)
+    local waypointDropdown
 
     local function refreshWaypoints()
         local names = {}
@@ -475,6 +885,9 @@ local function installLelHubControls(library, window, configuration)
             refreshWaypoints()
         end
     end)
+    waypointDropdown = register(places, "Dropdown", "Waypoint", { Title = lelHubTitle("Saved position"), Values = {}, Multi = false }, function(value)
+        selectedWaypoint = value
+    end)
     button(places, "Go to saved position", function()
         local frame = selectedWaypoint and waypoints[selectedWaypoint]
 
@@ -491,10 +904,11 @@ local function installLelHubControls(library, window, configuration)
             refreshWaypoints()
         end
     end)
-    register(places, "Input", "Coordinates", { Title = lelHubTitle("Coordinates"), Default = "", Placeholder = "X, Y, Z", Finished = true }, function(value)
+    local coordinates = ui(utilityTab, "Section", "Coordinates")
+    register(coordinates, "Input", "Coordinates", { Title = lelHubTitle("Coordinates"), Default = "", Placeholder = "X, Y, Z", Finished = true }, function(value)
         coordinateText = tostring(value)
     end)
-    button(places, "Teleport to coordinates", function()
+    button(coordinates, "Teleport to coordinates", function()
         local values = {}
 
         for token in coordinateText:gmatch("[^,%s]+") do
@@ -513,7 +927,7 @@ local function installLelHubControls(library, window, configuration)
 
         return teleport(CFrame.new(values[1], values[2], values[3]))
     end)
-    button(places, "Copy coordinates", function()
+    button(coordinates, "Copy coordinates", function()
         local _, _, root = parts()
 
         if root and type(setclipboard) == "function" then
@@ -871,6 +1285,7 @@ local function installLelHubControls(library, window, configuration)
             connection:Disconnect()
         end
 
+        if reviewedCleanup then reviewedCleanup() end
         releaseSprint()
         releaseSpin()
         restoreSpectate()
@@ -1158,13 +1573,10 @@ local targetConnection
 local lastTarget
 local lastParry = -math.huge
 local warned = false
-local ballESP = false
-local ballHighlight
 
 local function bindBall(ball)
     if currentBall == ball then return end
     if targetConnection then targetConnection:Disconnect() targetConnection = nil end
-    if ballHighlight then ballHighlight:Destroy() ballHighlight = nil end
     currentBall = ball
     lastTarget = ball and ball:GetAttribute("target")
     lastParry = -math.huge
@@ -1229,15 +1641,6 @@ end)
 hub:Connect(runService.PreSimulation, function()
     local ball = findBall()
     bindBall(ball)
-    if ballESP and ball and not ballHighlight then
-        ballHighlight = Instance.new("Highlight")
-        ballHighlight.Name, ballHighlight.Adornee, ballHighlight.Parent = "LelHubBallESP", ball, ball
-        ballHighlight.DepthMode, ballHighlight.FillTransparency = Enum.HighlightDepthMode.AlwaysOnTop, 0.45
-    end
-    if ballHighlight then
-        local color = ball:GetAttribute("target") == player.Name and Color3.fromRGB(255, 90, 110) or Color3.fromRGB(100, 235, 160)
-        ballHighlight.FillColor, ballHighlight.OutlineColor = color, color
-    end
     if not state.Enabled or not ball or input:GetFocusedTextBox() then return end
     local character = player.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -1253,14 +1656,6 @@ hub:Connect(runService.PreSimulation, function()
     if distance > 0.01 and velocity:Dot(offset) <= 0 then return end
     if distance / speed <= state.ReactionTime and activateBlock() then lastParry = os.clock() end
 end)
-local visuals = hub:Tab("ESP", "eye")
-hub:Toggle(visuals, "BallESP", "Ball ESP", function(value)
-    ballESP = value
-    if not value and ballHighlight then ballHighlight:Destroy() ballHighlight = nil end
-end)
-hub:Add(function()
-    if targetConnection then targetConnection:Disconnect() end
-    if ballHighlight then ballHighlight:Destroy() end
-end)
+hub:Add(function() if targetConnection then targetConnection:Disconnect() end end)
 hub.Controller = state
 return hub:Finish()
