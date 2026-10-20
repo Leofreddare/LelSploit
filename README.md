@@ -32,9 +32,10 @@ LelSploit is a lightweight simple executor for roblox
 ---
 
 # Score
+- Vulnerability 100%
 - UNC 82%
 - sUNC 81%
-- Vulnerability 100%
+- Myriad 40%
 
 ---
 
