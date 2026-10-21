@@ -4,6 +4,7 @@ from lelsploit_editor_support import (find_spans, encoded_spans, masked_code_byt
 import base64
 from lelsploit_desktop import WindowRouter
 import math
+import logging
 import random
 import statistics
 import codecs
@@ -45,14 +46,18 @@ APPDATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 BASE_DIR = APPDATA_DIR
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-from lelsploit_api import (
+from api.lelsploit_api import (
+    configure_logging,
     CombinedStop,
     attach_api,
     run_script,
     reattach_api,
     detach_api,
 )
+configure_logging()
 APP_ICON_PATH = RUNTIME_DIR / "icon.ico"
 APP_USER_MODEL_ID = "LelSploit"
 READ_CHUNK = 64 * 1024
@@ -246,7 +251,6 @@ FASTFLAG_KEYS = {
 DEFAULT_FASTFLAGS = {}
 
 
-ROBLOX_API_DUMP_URL = "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/roblox/API-Dump.json"
 ROBLOX_API_DUMP_LIMIT = 12 * 1024 * 1024
 AUTOCOMPLETE_ANALYSIS_LIMIT = 4 * 1024 * 1024
 
@@ -506,20 +510,6 @@ class RobloxApiIndex:
             self.member_names = member_names | {name for members in new_classes.values() for name in members}
         return True
 
-    def refresh_remote(self):
-        try:
-            request = urllib.request.Request(
-                ROBLOX_API_DUMP_URL,
-                headers={"Accept": "application/json", "User-Agent": "LelSploit/1.0"},
-            )
-            with urllib.request.urlopen(request, timeout=12) as response:
-                raw = response.read(ROBLOX_API_DUMP_LIMIT + 1)
-            if len(raw) > ROBLOX_API_DUMP_LIMIT:
-                return
-            self.load_dump(json.loads(raw.decode("utf-8")))
-        except Exception:
-            return
-
     def class_members(self, class_name, method_only=False):
         class_name = str(class_name or "")
         merged = {}
@@ -559,7 +549,16 @@ class RobloxApiIndex:
 
 
 ROBLOX_API_INDEX = RobloxApiIndex()
-threading.Thread(target=ROBLOX_API_INDEX.refresh_remote, daemon=True).start()
+def _load_local_api_dump():
+    for path in (RUNTIME_DIR / 'API-Dump.json', BASE_DIR / 'cache' / 'API-Dump.json'):
+        try:
+            if path.is_file() and path.stat().st_size <= ROBLOX_API_DUMP_LIMIT:
+                if ROBLOX_API_INDEX.load_dump(json.loads(path.read_text(encoding='utf-8-sig'))):
+                    break
+        except (OSError, ValueError, TypeError):
+            continue
+
+_load_local_api_dump()
 
 
 def read_json_object(path, default=None):
@@ -1650,29 +1649,16 @@ def stream_remote_text(output, request_id, url, cancelled, limit=TOOL_FETCH_LIMI
         return False
 
     try:
-        parsed = urllib.parse.urlsplit(url)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError("Only http:// and https:// URLs are supported.")
-        request = urllib.request.Request(
-            url,
-            headers={"Accept": "text/plain,*/*;q=0.8", "User-Agent": "LelSploit/1.0"},
-        )
-        total = 0
-        with urllib.request.urlopen(request, timeout=15) as response:
-            while not cancelled.is_set():
-                chunk = response.read(READ_CHUNK)
-                if not chunk:
-                    send("done", total)
-                    return
-                total += len(chunk)
-                if total > limit:
-                    raise ValueError(
-                        f"Response exceeded the {limit // (1024 * 1024)} MiB display limit."
-                    )
-                if not send("chunk", chunk):
-                    return
+        from lelsploit_source_tools import download_source
+        data = download_source(url, cancelled, limit)
+        if data is None:
+            return
+        for offset in range(0, len(data), READ_CHUNK):
+            if not send('chunk', data[offset:offset + READ_CHUNK]):
+                return
+        send('done', len(data))
     except Exception as exc:
-        send("error", str(exc))
+        send('error', str(exc))
 
 
 SCRIPTBLOX_USER_AGENT = "LelSploit ScriptBloxApi/1.0"
@@ -1748,6 +1734,11 @@ def current_roblox_join_context(require_running=True):
             logs = list(log_dir.glob("*.log"))
         log = max(logs, key=lambda path: path.stat().st_mtime_ns)
         log_mtime_ns = log.stat().st_mtime_ns
+        if require_running:
+            from lelsploit_source_tools import newest_player_started_at
+            started = newest_player_started_at()
+            if started is None or log.stat().st_ctime < started - 2:
+                return None
         with log.open("rb") as handle:
             handle.seek(0, 2)
             size = handle.tell()
@@ -1763,6 +1754,8 @@ def current_roblox_join_context(require_running=True):
     if not matches:
         return None
     match = matches[-1]
+    if re.search(rb'(?:FLog::Network[^\r\n]*(?:Disconnect|disconnect)|FLog::SingleSurfaceApp[^\r\n]*(?:leaveGame|LeaveGame|returnToApp)|UGCGameController[^\r\n]*leave)', data[match.end():]):
+        return None
     try:
         job_id = match.group(1).decode("ascii", errors="ignore").strip()
         place_id = match.group(2).decode("ascii")
@@ -2055,7 +2048,7 @@ except ImportError as exc:
         f"Details: {exc}"
     )
     try:
-        (BASE_DIR / "startup_error.log").write_text(message, encoding="utf-8")
+        (LOG_DIR / "startup_error.log").write_text(message, encoding="utf-8")
     except Exception:
         pass
     if sys.platform == "win32":
@@ -2881,15 +2874,15 @@ BLUR_STYLESHEET = r"""
         font-weight: 600;
     }
     QPushButton#dangerButton:hover { background: #672828; border-color: #a14747; }
-    QScrollArea, QScrollArea > QWidget > QWidget {
-        background: #0b0c0d;
+    QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
+        background: transparent;
         border: none;
     }
     QMenu {
         background: #131517;
         color: #e6e9e7;
         border: 1px solid #2b302d;
-        border-radius: 7px;
+        border-radius: 0px;
         padding: 4px;
     }
     QMenu::item { padding: 7px 20px 7px 10px; border-radius: 5px; }
@@ -2948,7 +2941,7 @@ class LelComboBox(QComboBox):
                 background: #151517;
                 color: #eeeeee;
                 border: 1px solid #343438;
-                border-radius: 8px;
+                border-radius: 0px;
                 padding: 5px;
             }
             QMenu#lelComboMenu::item {
@@ -3311,25 +3304,34 @@ class BlurTitleBar(QFrame):
         row.setContentsMargins(8, 5, 6, 5)
         row.setSpacing(5)
 
-        if title != "LelSploit":
-            title_icon = QLabel()
-            title_icon.setObjectName("blurWindowIcon")
-            title_icon.setFixedSize(20, 20)
-            icon = lelsploit_icon()
-            if not icon.isNull():
-                title_icon.setPixmap(icon.pixmap(16, 16))
-            row.addWidget(title_icon)
+        title_icon = QLabel()
+        title_icon.setObjectName("blurWindowIcon")
+        title_icon.setFixedSize(24, 24)
+        title_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        icon = lelsploit_icon()
+        if not icon.isNull():
+            title_icon.setPixmap(icon.pixmap(20, 20))
+        row.addWidget(title_icon)
+        self.title_icon = title_icon
 
-        title_label = QLabel(title)
+        title_label = QLabel(title, self)
         title_label.setObjectName("blurWindowTitle")
-        if title == "LelSploit":
+        self._centered_title = title_label if title == 'LelSploit' else None
+        if self._centered_title is not None:
             title_label.setStyleSheet(
                 f"background:transparent;color:{ui_config('title','color','#e3e5e6')};"
                 f"font-size:{int(ui_config('title','font_size',14))}px;"
                 f"font-weight:{int(ui_config('title','font_weight',800))};"
-                f"font-style:{ui_config('title','font_style','oblique')};"
+                "font-style:normal;padding:0;"
             )
-        row.addWidget(title_label)
+            title_label.setTextFormat(Qt.TextFormat.PlainText)
+            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            font = title_label.font()
+            font.setItalic(False)
+            title_label.setFont(font)
+        else:
+            row.addWidget(title_label)
         row.addStretch(1)
 
         self.pin_button = QPushButton()
@@ -3376,8 +3378,25 @@ class BlurTitleBar(QFrame):
         self._topmost_timer.setInterval(700)
         self._topmost_timer.timeout.connect(self._refresh_topmost)
         window.installEventFilter(self)
+        self.installEventFilter(self)
         QTimer.singleShot(0, self._sync_native_window)
         QTimer.singleShot(0, lambda: _sync_extension_titlebar(self))
+
+    def _position_centered_title(self):
+        label = self._centered_title
+        if label is None:
+            return
+        controls = [widget for widget in self.findChildren(QPushButton) if widget.isVisible()]
+        right_width = max((self.width() - widget.x() for widget in controls), default=102)
+        reserve = max(40, right_width + 8)
+        label.setGeometry(reserve, 0, max(0, self.width() - reserve * 2), self.height())
+        label.raise_()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, '_centered_title'):
+            self._position_centered_title()
+            QTimer.singleShot(0, self._position_centered_title)
 
     def toggle_rollup(self):
         body = getattr(self.owner_window, "_blur_body", None)
@@ -3507,6 +3526,7 @@ class BlurTitleBar(QFrame):
         window.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
     def _sync_native_window(self):
+        self._position_centered_title()
         if not self.owner_window.isWindow():
             return
         self._apply_rounded_corners()
@@ -3514,6 +3534,8 @@ class BlurTitleBar(QFrame):
             self._refresh_topmost()
 
     def eventFilter(self, watched, event):
+        if watched is self and event.type() == QEvent.Type.LayoutRequest:
+            QTimer.singleShot(0, self._position_centered_title)
         if watched is self.owner_window:
             if event.type() == QEvent.Type.Close and self._rolled_up:
                 body = getattr(self.owner_window, "_blur_body", None)
@@ -8314,7 +8336,7 @@ UI_CONFIG_DEFAULT = {
         "background": "#101214", "hover": "#1c2022", "border": "#272b2e", "corner_radius": 5,
         "text_width": 116, "text_height": 34, "icon_size": 34, "spacing": 5,
     },
-    "title": {"color": "#e3e5e6", "font_size": 14, "font_weight": 800, "font_style": "oblique"},
+    "title": {"color": "#e3e5e6", "font_size": 14, "font_weight": 800, "font_style": "normal"},
 }
 SYNTAX_COLORS_DEFAULT = {
     "syntax_comment": "#7f936f", "syntax_keyword": "#86a8e7", "syntax_string": "#a8c77a",
@@ -8601,7 +8623,7 @@ QLineEdit, QPlainTextEdit, QTextBrowser, QComboBox, QSpinBox, QListWidget, QTabl
 QLineEdit:focus, QPlainTextEdit:focus, QTextBrowser:focus, QComboBox:focus, QSpinBox:focus {{ border-color: {t['accent']}; }}
 QComboBox::drop-down, QSpinBox::up-button, QSpinBox::down-button {{ background: transparent; border: none; }}
 QComboBox QAbstractItemView {{ background: {t['surface_alt']}; color: {t['text']}; border: {border_w}px solid {t['border']}; selection-background-color: {t['selection']}; outline: none; }}
-QMenu {{ background: {t['surface_alt']}; color: {t['text']}; border: {border_w}px solid {t['border']}; border-radius: {radius}px; padding: 5px; }}
+QMenu {{ background: {t['surface_alt']}; color: {t['text']}; border: {border_w}px solid {t['border']}; border-radius: 0px; padding: 5px; }}
 QMenu::item {{ padding: 6px 18px 6px 9px; border-radius: {small_radius}px; }}
 QMenu::item:selected {{ background: {t['selection']}; color: {t['text']}; }}
 QMenu::separator {{ background: {t['border']}; height: 1px; margin: 5px; }}
@@ -8988,9 +9010,9 @@ strong { color:#f3f3f5; } li { margin:3px 0; } .note { border-left:3px solid #3a
   ]
 }</pre>
 
-<h2>Security boundary</h2>
+<h2>What an extension can access</h2>
 <p>LExt is intentionally powerful <b>inside LelSploit</b>. It does not provide arbitrary Python/native execution, shell or process launch, DLL loading, registry access, unrestricted writes outside the extension sandbox, silent access to arbitrary user files, browser/cookie/password extraction, private-network probing, or bypasses around user file pickers. Public network access is URL/address checked, package/data sizes are bounded, and external file writes require the user to choose the destination.</p>
-<p>This boundary is deliberate: future extension capabilities should be added as narrow documented operations with permissions rather than exposing a generic native-code escape hatch.</p>
+<p>If a task needs something outside these controls, use the app’s own tools or choose a file in a picker. Check the permissions before enabling an extension you downloaded.</p>
 
 """
 DOCUMENTATION_HTML = r"""
@@ -9000,7 +9022,17 @@ h1 {font-size:22pt; color:#fff;} h2 {font-size:15pt; color:#b7d5ff; margin-top:2
 p,li {margin-bottom:8px;} code,pre {font-family:Consolas; color:#b9df9d;} pre {background:#141820; padding:12px; white-space:pre-wrap;}
 a {color:#91caff;} table {border-collapse:collapse; width:100%;} td,th {padding:8px; border:1px solid #343b47; text-align:left;} th {background:#202735; color:white;}
 </style>
-<h1>LelSploit help</h1>
+<h1>Make yourself at home</h1>
+<p>Start with a script tab. Paste your code, use <b>Ctrl+F</b> to find something, or open Tools when you need to inspect a script.</p>
+<h2>Your first few minutes</h2>
+<ol><li><b>Open a script.</b> Create a tab or open a Lua/Luau file from your computer.</li>
+<li><b>Join an experience.</b> Wait for your Roblox game to load, then choose Attach.</li>
+<li><b>Keep useful scripts.</b> In ScriptBlox, click the star. Open Saved scripts and use the arrows to put your favorites in order.</li></ol>
+<h2>Inspect a script in Tools</h2>
+<p><b>Loadstring reverser:</b> paste a loader or its URL. Direct downloads work even when their names have no extension. The result opens as text; fetching it does not run it.</p>
+<p><b>Deobfuscate:</b> paste Lua or Luau, then choose Deobfuscate. It works locally. Read the status below the controls to see what it recovered and what it could not resolve. Protected loaders may need source that is not included in the script.</p>
+<h2>Where things live</h2>
+<p>Your settings and saved scripts stay in <code>%APPDATA%\LelSploit</code>. Logs are in the <code>logs</code> folder. Code completion and documentation work offline; ScriptBlox, updates and remote downloads need a connection.</p>
 <p><b>Start with a task.</b> Pick a section on the left, or search by what you want to do: “replace”, “autocomplete”, “install extension”, or “build macro”. Search covers all three documentation tabs.</p>
 <h2 id="start">Quick start: edit your first script</h2>
 <ol><li>Open the app. The selected tab is your current code file.</li><li>Type <code>print("Hello, World!")</code>. Strings, numbers, functions, and keywords have different colors.</li><li>Use the save icon above the editor to save a copy as a <code>.luau</code> or <code>.lua</code> file.</li><li>To work on another script, use the plus button next to the tabs. Switch tabs to return to your first script.</li></ol>
@@ -9089,6 +9121,12 @@ class DocumentationWindow(QDialog):
         apply_window_icon(self)
 
         layout = blur_content_layout(self, self, "Documentation", (22, 12, 18, 16), 8)
+        intro = QLabel('How can we help?')
+        intro.setStyleSheet('font-size:24px;font-weight:600;color:#f0f4f2;background:transparent;padding:4px 0;')
+        layout.addWidget(intro)
+        hint = QLabel('Find a task, follow a short guide, or look up a command.')
+        hint.setStyleSheet('color:#96a69d;background:transparent;padding-bottom:8px;')
+        layout.addWidget(hint)
         self.tabs = QTabWidget()
         self.tabs.setObjectName("documentationTabs")
         self.tabs.setDocumentMode(True)
@@ -9120,7 +9158,7 @@ class DocumentationWindow(QDialog):
             QLineEdit#helpSearch { background:#141820; color:#f0f3fa; border:1px solid #485467; border-radius:5px; padding:8px; }
             QLabel#helpCount { color:#aeb9cb; padding:5px 0; }
             QListWidget#helpTopics { background:#10141b; color:#cbd7e8; border:1px solid #2d3542; border-radius:4px; padding:4px; outline:0; }
-            QListWidget#helpTopics::item { padding:7px 5px; border-bottom:1px solid #232a35; }
+            QListWidget#helpTopics::item { padding:10px 8px; margin:2px; border-radius:6px; }
             QListWidget#helpTopics::item:selected { background:#2b415f; color:#ffffff; }
             QListWidget#helpTopics::item:hover { background:#1d2b3e; }
             QSplitter::handle { background:#2d3542; width:4px; }
@@ -9152,6 +9190,18 @@ class DocumentationWindow(QDialog):
         self._doc_browsers = (self.browser, self.extension_browser, self.macro_browser)
         sources = (DOCUMENTATION_HTML, EXTENSIONS_DOCUMENTATION_HTML, MACRO_START_GUIDE + _lelsploit_macros.MACRO_DOCUMENTATION_HTML)
         for tab, (browser, source) in enumerate(zip(self._doc_browsers, sources)):
+            source = re.sub(r'<style>.*?</style>', '', source, flags=re.S)
+            source = '''<style>
+body { font-family:'Segoe UI'; font-size:11pt; color:#cbd5ce; background:#0b0c0d; margin:18px; }
+h1 { font-size:24pt; color:#f3f6f4; margin-bottom:14px; }
+h2 { font-size:16pt; color:#b8d8c4; margin-top:28px; margin-bottom:12px; }
+h3 { font-size:12pt; color:#e4ede7; margin-top:20px; }
+p,li { line-height:155%; margin-bottom:10px; } a { color:#a4cbb4; }
+pre { background:#151d19; color:#d2e5d9; padding:14px; white-space:pre-wrap; }
+code { font-family:Consolas; color:#b8d8c4; }
+table { border-collapse:collapse; width:100%; margin-top:12px; margin-bottom:18px; }
+th { background:#1b2820; color:#e1eee6; } th,td { padding:10px; border:1px solid #2c3931; }
+</style>''' + source
             markup, sections = document_sections(source)
             browser.setHtml(markup)
             browser.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
@@ -9183,7 +9233,7 @@ class DocumentationWindow(QDialog):
         splitter.addWidget(side)
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([285, 700])
+        splitter.setSizes([250, 750])
         layout.addWidget(splitter, 1)
         shortcut = QShortcut(QKeySequence.StandardKey.Find, self)
         shortcut.activated.connect(lambda: (self.help_search.setFocus(), self.help_search.selectAll()))
@@ -10232,7 +10282,8 @@ class LelSploitWindow(QMainWindow):
         muted = ui_config("window", "muted", "#92989b")
         button_radius = int(ui_config("buttons", "corner_radius", 5))
         self.setStyleSheet(f"""
-            QMainWindow, QWidget {{ background: {window_bg}; color: {text_color}; }}
+            QWidget {{ background: transparent; color: {text_color}; }}
+            QMainWindow {{ background: {window_bg}; }}
             QLabel, QCheckBox {{ background: transparent; }}
             QLabel {{ color: #b7bbbd; }}
             QPushButton {{ background: {surface}; border: 1px solid {border};
@@ -11769,7 +11820,8 @@ class LelSploitWindow(QMainWindow):
         return behavior
 
     def log(self, message, level=None):
-        return
+        severity = {'warning': logging.WARNING, 'error': logging.ERROR, 'debug': logging.DEBUG}.get(level, logging.INFO)
+        logging.getLogger('LelSploit').log(severity, '%s', str(message))
 
     def set_syntax_colors_enabled(self, enabled):
         self.syntax_colors_enabled = bool(enabled)
@@ -12311,29 +12363,14 @@ class LelSploitWindow(QMainWindow):
         self.set_syntax_colors_enabled(True)
 
     def confirm_attach_without_roblox(self):
-        if sys.platform != "win32":
-            return True
-        running = self.roblox_running
-        if running is None:
-            try:
-                running = roblox_is_running()
-                self.set_roblox_state(running)
-            except Exception:
-                return True
-        if running:
-            return True
-        box = QMessageBox(self)
-        box.setWindowTitle("Roblox not found")
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setText("LelSploit couldn't find a running Roblox Player instance.")
-        box.setInformativeText(
-            "Do you want to continue anyway? LelSploit will still attempt to attach."
-        )
-        proceed = box.addButton("Proceed", QMessageBox.ButtonRole.AcceptRole)
-        cancel = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(cancel)
-        box.exec()
-        return box.clickedButton() is proceed
+        try:
+            ready = current_roblox_join_context(require_running=True) is not None
+        except Exception:
+            ready = False
+        if not ready:
+            self.log('Join a Roblox experience before attaching or executing a script.', 'warning')
+            QMessageBox.information(self, 'Join an experience', 'Open a Roblox experience and wait for it to load, then try again.')
+        return ready
 
     def apply_saved_username_spoofer(self):
         settings = load_username_spoofer_settings()
@@ -12895,6 +12932,8 @@ class LelSploitWindow(QMainWindow):
             try:
                 logger = lambda message: self.events.put(("log", message))
                 stop = CombinedStop(self.stopping, cancel)
+                if action in ('attach', 'reattach', 'execute') and current_roblox_join_context(require_running=True) is None:
+                    raise RuntimeError('No active Roblox experience. Join a game before attaching.')
                 if action in ("attach", "reattach"):
                     api = reattach_api(
                         logger, stop, api, initial=action == "attach"
@@ -13035,7 +13074,7 @@ del _feature_module
 def _report_startup_error(exc):
     detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     try:
-        (BASE_DIR / "startup_error.log").write_text(detail, encoding="utf-8")
+        (LOG_DIR / "startup_error.log").write_text(detail, encoding="utf-8")
     except Exception:
         pass
     if sys.platform == "win32":

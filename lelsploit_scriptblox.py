@@ -1021,12 +1021,34 @@ class ScriptBloxWindow(QDialog):
     def refresh_saved(self):
         scripts = list(self.saved_scripts.values())
         scripts.sort(
-            key=lambda item: float(item.get("_lelsploit_saved_at", 0) or 0),
-            reverse=True,
+            key=lambda item: (float(item.get("_lelsploit_order", 0) or 0), -float(item.get("_lelsploit_saved_at", 0) or 0)),
         )
         self.show_scripts(scripts, append=False)
         if not scripts:
             self.status.setText("No saved scripts.")
+
+    def move_saved_script(self, key, offset):
+        scripts = sorted(self.saved_scripts.values(), key=lambda item: (float(item.get('_lelsploit_order', 0) or 0), -float(item.get('_lelsploit_saved_at', 0) or 0)))
+        keys = [scriptblox_script_key(item) for item in scripts]
+        if key not in keys:
+            return
+        index = keys.index(key)
+        target = index + offset
+        if not 0 <= target < len(keys):
+            return
+        scripts[index], scripts[target] = scripts[target], scripts[index]
+        previous = {k: dict(v) for k, v in self.saved_scripts.items()}
+        for position, script in enumerate(scripts):
+            self.saved_scripts[scriptblox_script_key(script)]['_lelsploit_order'] = position
+        try:
+            save_saved_scripts(self.saved_scripts)
+        except Exception as exc:
+            self.saved_scripts = previous
+            self.status.setText(f'Could not save order: {exc}')
+            return
+        position = self.scroll.verticalScrollBar().value()
+        self.refresh_saved()
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(position))
 
     def request_page(self, page, append):
         self.request_id += 1
@@ -1097,6 +1119,22 @@ class ScriptBloxWindow(QDialog):
             meta_label.setTextFormat(Qt.TextFormat.PlainText)
             details.addWidget(meta_label)
             card_layout.addLayout(details, 1)
+            if self.saved_only:
+                ordered = sorted(self.saved_scripts, key=lambda k: (float(self.saved_scripts[k].get('_lelsploit_order', 0) or 0), -float(self.saved_scripts[k].get('_lelsploit_saved_at', 0) or 0)))
+                for icon_name, glyph, offset, label in (('up', '↑', -1, 'Move up'), ('down', '↓', 1, 'Move down')):
+                    move = QPushButton()
+                    move.setFixedSize(30, 34)
+                    icon = app_icon(icon_name)
+                    if not icon.isNull():
+                        move.setIcon(icon)
+                        move.setIconSize(QSize(16, 16))
+                    else:
+                        move.setText(glyph)
+                    move.setAccessibleName(label)
+                    move.setToolTip(label)
+                    move.setEnabled(0 <= ordered.index(key) + offset < len(ordered))
+                    move.clicked.connect(lambda checked=False, k=key, d=offset: self.move_saved_script(k, d))
+                    card_layout.addWidget(move)
             install = QPushButton("Install")
             if not install_icon.isNull():
                 install.setIcon(install_icon)
@@ -1142,6 +1180,7 @@ class ScriptBloxWindow(QDialog):
             except (TypeError, ValueError):
                 saved = dict(script)
             saved["_lelsploit_saved_at"] = time.time()
+            saved['_lelsploit_order'] = min((float(item.get('_lelsploit_order', 0) or 0) for item in self.saved_scripts.values()), default=0) - 1
             self.saved_scripts[key] = saved
             starred = True
         try:

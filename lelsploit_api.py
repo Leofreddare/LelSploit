@@ -1,5 +1,7 @@
 from __future__ import annotations
 import ctypes
+import logging
+from logging.handlers import RotatingFileHandler
 import hashlib
 import json
 import os
@@ -28,6 +30,29 @@ DEPENDENCIES = ('libcrypto-3-x64.dll', 'libssl-3-x64.dll', 'xxhash.dll', 'zstd.d
 REQUIRED_FILES = (*DEPENDENCIES, 'libls.dll')
 _DLL_SYNC_LOCK = threading.RLock()
 _NATIVE_CALL_LOCK = threading.RLock()
+_ATTACH_REQUESTS = {}
+_LOGGER = logging.getLogger('LelSploit')
+_LOGGER.addHandler(logging.NullHandler())
+
+def configure_logging(path: str | Path | None = None, level: int = logging.INFO):
+    with _NATIVE_CALL_LOCK:
+        target = Path(path).expanduser().resolve() if path is not None else APPDATA_DIR / 'logs' / 'LelSploit.log'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(target, maxBytes=1048576, backupCount=3, encoding='utf-8')
+        handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s LelSploit: %(message)s'))
+        for previous in tuple(_LOGGER.handlers):
+            if getattr(previous, '_lelsploit_owned', False):
+                _LOGGER.removeHandler(previous)
+                previous.close()
+        handler._lelsploit_owned = True
+        _LOGGER.addHandler(handler)
+        _LOGGER.setLevel(level)
+        return target
+
+def _positive_duration(value, name):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+        raise ValueError(f'{name} must be a positive finite number')
+    return float(value)
 
 class LuaExpr:
 
@@ -364,16 +389,33 @@ class LelSploit:
             self.initialize()
         return self._engine
 
-    def attach(self) -> None:
-        engine = self._engine_or_initialize()
+    def attach(self, force: bool = False) -> None:
+        if not isinstance(force, bool):
+            raise TypeError('force must be a boolean')
         with self._lock:
+            engine = self._engine_or_initialize()
+            if engine.IsAttached() and not force:
+                return
+            key = id(engine)
+            now = time.monotonic()
+            for pending_key, pending in tuple(_ATTACH_REQUESTS.items()):
+                if now - pending[1] >= 20:
+                    _ATTACH_REQUESTS.pop(pending_key, None)
+            previous = _ATTACH_REQUESTS.get(key)
+            if not force and previous and previous[0] is engine and now - previous[1] < 20:
+                return
             engine.SetSettings(0, 0)
             engine.Attach()
+            _ATTACH_REQUESTS[key] = (engine, time.monotonic())
+            _LOGGER.info('Attachment requested')
 
     def is_attached(self) -> bool:
         engine = self._engine_or_initialize()
         with self._lock:
-            return bool(engine.IsAttached())
+            attached = bool(engine.IsAttached())
+            if attached:
+                _ATTACH_REQUESTS.pop(id(engine), None)
+            return attached
 
     def execute(self, lua_script: str) -> None:
         if not isinstance(lua_script, str):
@@ -702,37 +744,59 @@ class CombinedStop:
             time.sleep(min(0.05, remaining))
         return True
 
-def attach_api(log, stop, api=None, force=False):
-    if api is None:
-        api = LelSploit()
-        api.initialize()
-        force = True
-    if force or not api.is_attached():
-        api.attach()
-    deadline = time.monotonic() + 20
-    while not api.is_attached():
-        if stop.is_set():
-            return None
-        if time.monotonic() >= deadline:
-            raise TimeoutError('LelSploit API did not report an attached client.')
-        stop.wait(0.25)
+def attach_api(log, stop, api=None, force=False, timeout=20.0, poll_interval=0.1):
+    timeout = _positive_duration(timeout, 'timeout')
+    poll_interval = _positive_duration(poll_interval, 'poll_interval')
+    if not isinstance(force, bool):
+        raise TypeError('force must be a boolean')
     if stop.is_set():
         return None
-    log('LelSploit API reports attached.')
-    return api
+    if api is None:
+        api = LelSploit()
+        if stop.is_set():
+            return None
+        api.initialize()
+    if stop.is_set():
+        return None
+    if force or not api.is_attached():
+        if stop.is_set():
+            return None
+        log('LelSploit: requesting attachment.')
+        if stop.is_set():
+            return None
+        if isinstance(api, LelSploit):
+            api.attach(force=force)
+        else:
+            api.attach()
+    deadline = time.monotonic() + timeout
+    while not stop.is_set():
+        if api.is_attached():
+            if stop.is_set():
+                return None
+            log('LelSploit API reports attached.')
+            _LOGGER.info('Client reports attached')
+            return api
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _LOGGER.warning('Attachment timed out')
+            raise TimeoutError('LelSploit API did not report an attached client.')
+        stop.wait(min(poll_interval, remaining))
+    _LOGGER.info('Attachment wait cancelled')
+    return None
+
 
 def run_script(source, log, stop, api=None):
     api = attach_api(log, stop, api)
     if api is None:
         return None
     api.execute(source)
-    log("Script sent. Check the client's output.")
+    log("LelSploit: script dispatched. Check the client's output.")
     return api
 
 def reattach_api(log, stop, api=None, initial=False):
     api = attach_api(log, stop, api, force=True)
     if api is not None:
-        log('Attached successfully.' if initial else 'Reattached successfully.')
+        log('LelSploit: client reports attached.' if initial else 'LelSploit: client reports reattached.')
     return api
 
 def detach_api(api, log=None):
@@ -752,5 +816,5 @@ def detach_api(api, log=None):
         except Exception:
             break
     if log is not None:
-        log('Detached from Roblox.' if detached else 'Attachment state cleared.')
+        log('LelSploit: disconnect method completed.' if detached else 'LelSploit: local API reference cleared; native detach is unavailable.')
     return None

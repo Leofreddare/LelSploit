@@ -684,6 +684,13 @@ local function installLelHubExpandedTools(library, window, configuration)
     end)
     local playersTab = configuration.ExpandedPlayersTab or window:CreateTab({ Title = "Players", Icon = "users" })
     local selected, follow, orbit, orbitRadius, followDistance, angle = nil, false, false, 8, 5, 0
+    local orbitRoot, orbitTarget, orbitHuman, orbitAutoRotate, orbitCenter
+    local smoothedRadius = orbitRadius
+    local function releaseOrbit()
+        if orbitHuman and orbitHuman.Parent then orbitHuman.AutoRotate = orbitAutoRotate end
+        orbitRoot, orbitTarget, orbitHuman, orbitCenter = nil, nil, nil, nil
+        configuration.LelHubOrbitActive = false
+    end
     local targetSection = playersTab:CreateSection("Target Actions")
     local names, targetDropdown = { "None" }, nil
     local function refresh(leaving)
@@ -703,7 +710,10 @@ local function installLelHubExpandedTools(library, window, configuration)
     end
     control(targetSection, "Toggle", "Follow", false, function(value) follow = value end)
     control(targetSection, "Slider", "Follow Distance", 5, 2, 30, function(value) followDistance = value end)
-    control(targetSection, "Toggle", "Orbit", false, function(value) orbit = value end)
+    control(targetSection, "Toggle", "Orbit", false, function(value)
+        orbit = value
+        if not value then releaseOrbit() end
+    end)
     control(targetSection, "Slider", "Orbit Radius", 8, 3, 40, function(value) orbitRadius = value end)
     if not configuration.HasPlayerTeleport then
     button(targetSection, "Teleport To Player", function()
@@ -754,11 +764,44 @@ local function installLelHubExpandedTools(library, window, configuration)
     end)
     connect(workspace.DescendantAdded, effect)
     connect(lighting.DescendantAdded, effect)
+    local orbitBinding = "LelHubOrbit_" .. game:GetService("HttpService"):GenerateGUID(false)
+    runService:BindToRenderStep(orbitBinding, Enum.RenderPriority.Camera.Value - 1, function(delta)
+        local selected = target()
+        local other = selected and rootOf(selected.Character)
+        local human, root = humanoid(), rootOf(player.Character)
+        local targetHuman = selected and selected.Character and selected.Character:FindFirstChildOfClass("Humanoid")
+        if stopped or library.Unloaded or not orbit or not selected or selected == player
+            or selected.Parent ~= players or not other or not root or not human
+            or human.Health <= 0 or human.SeatPart or human.PlatformStand or root.Anchored
+            or (targetHuman and targetHuman.Health <= 0) or input:GetFocusedTextBox()
+            or (configuration.IsMovementBlocked and configuration.IsMovementBlocked()) then
+            releaseOrbit()
+            return
+        end
+        if orbitRoot ~= root or orbitTarget ~= other or orbitHuman ~= human then
+            releaseOrbit()
+            orbitRoot, orbitTarget, orbitHuman = root, other, human
+            orbitAutoRotate = human.AutoRotate
+            orbitCenter, smoothedRadius = other.Position, orbitRadius
+            local offset = root.Position - other.Position
+            angle = math.atan2(offset.Z, offset.X)
+        end
+        configuration.LelHubOrbitActive = true
+        human.AutoRotate = false
+        human:Move(Vector3.zero, false)
+        local step = math.clamp(delta, 0, 0.1)
+        angle = (angle + step) % (math.pi * 2)
+        orbitCenter = orbitCenter:Lerp(other.Position, 1 - math.exp(-18 * step))
+        smoothedRadius = smoothedRadius + (orbitRadius - smoothedRadius) * (1 - math.exp(-12 * step))
+        local position = orbitCenter + Vector3.new(math.cos(angle) * smoothedRadius, 0, math.sin(angle) * smoothedRadius)
+        local frame = CFrame.lookAt(position, orbitCenter)
+        root.CFrame = root.CFrame:Lerp(frame, 1 - math.exp(-16 * step))
+        root.AssemblyLinearVelocity, root.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+    end)
     local elapsed = 0
     connect(runService.Heartbeat, function(delta)
         elapsed = elapsed + delta
         if elapsed < 0.1 then return end
-        local step = elapsed
         elapsed = 0
         local human, root = humanoid(), rootOf(player.Character)
         if bunnyHop and human and human.FloorMaterial ~= Enum.Material.Air then human.Jump = true end
@@ -766,16 +809,17 @@ local function installLelHubExpandedTools(library, window, configuration)
         local selected = target()
         local other = selected and rootOf(selected.Character)
         if other and root and human and not human.SeatPart and human.Health > 0 then
-            if orbit then
-                angle = angle + step
-                teleport(CFrame.new(other.Position + Vector3.new(math.cos(angle) * orbitRadius, 0, math.sin(angle) * orbitRadius), other.Position))
-            elseif follow and (root.Position - other.Position).Magnitude > followDistance then human:MoveTo((other.CFrame * CFrame.new(0, 0, followDistance)).Position) end
+            if not orbit and follow and (root.Position - other.Position).Magnitude > followDistance then
+                human:MoveTo((other.CFrame * CFrame.new(0, 0, followDistance)).Position)
+            end
         end
         if noFog then lighting.FogEnd = 1000000 for _, object in ipairs(lighting:GetChildren()) do if object:IsA("Atmosphere") then effect(object) end end end
     end)
     return function()
         if stopped then return end
         stopped = true
+        runService:UnbindFromRenderStep(orbitBinding)
+        releaseOrbit()
         if follow then local human = humanoid() if human then human:Move(Vector3.zero) end end
         for _, connection in ipairs(connections) do connection:Disconnect() end
         for object in pairs(restores) do restore(object) end
@@ -852,6 +896,10 @@ local function installLelHubControls(library, window, configuration)
     local originalCamera
     local basicValues = {}
     local basicFlags = { Noclip = false, InfiniteJump = false, Fly = false, FlySpeed = 100 }
+    configuration.IsMovementBlocked = configuration.IsMovementBlocked or function() return basicFlags.Fly end
+    local autoWalkBinding = "LelHubAutoWalk_" .. http:GenerateGUID(false)
+    local autoWalkHumanoid
+    local autoWalkDirection = Vector3.new(0, 0, -1)
 
     local function connect(signal, callback)
         local connection = signal:Connect(callback)
@@ -880,6 +928,13 @@ local function installLelHubControls(library, window, configuration)
     local function parts()
         local character = player.Character
         return character, character and character:FindFirstChildOfClass("Humanoid"), character and character:FindFirstChild("HumanoidRootPart")
+    end
+
+    local function releaseAutoWalk()
+        if autoWalkHumanoid and autoWalkHumanoid.Parent then
+            autoWalkHumanoid:Move(Vector3.zero, false)
+        end
+        autoWalkHumanoid = nil
     end
 
     local function remember(humanoid, property)
@@ -1028,6 +1083,7 @@ local function installLelHubControls(library, window, configuration)
         end
         basicFlags.Fly, basicFlags.Noclip, basicFlags.InfiniteJump = false, false, false
         state.Sprint, state.AutoWalk, state.NoSit, state.Spin = false, false, false, false
+        releaseAutoWalk()
         releaseSprint()
         releaseSpin()
         stopBasicFlight()
@@ -1101,14 +1157,7 @@ local function installLelHubControls(library, window, configuration)
     end)
     toggle(movement, "AutoWalk", "Auto walk", function(value)
         state.AutoWalk = value
-
-        if not value then
-            local _, humanoid = parts()
-
-            if humanoid then
-                humanoid:Move(Vector3.zero, false)
-            end
-        end
+        if not value then releaseAutoWalk() end
     end)
     toggle(movement, "NoSit", "Prevent sitting", function(value)
         state.NoSit = value
@@ -1631,6 +1680,8 @@ local function installLelHubControls(library, window, configuration)
         end
 
         destroyed = true
+        runService:UnbindFromRenderStep(autoWalkBinding)
+        releaseAutoWalk()
 
         if configuration.ShutdownLegacy then
             for id, control in pairs(library.Options or {}) do
@@ -1657,14 +1708,6 @@ local function installLelHubControls(library, window, configuration)
         local backpack = player:FindFirstChildOfClass("Backpack")
         local teleportTool = (character and character:FindFirstChild("LelHub Teleport")) or (backpack and backpack:FindFirstChild("LelHub Teleport"))
         if teleportTool then teleportTool:Destroy() end
-        if state.AutoWalk then
-            local _, humanoid = parts()
-
-            if humanoid then
-                humanoid:Move(Vector3.zero, false)
-            end
-        end
-
         restoreAccessories()
         stopBasicFlight()
         restoreBasicCollisions()
@@ -1699,6 +1742,7 @@ local function installLelHubControls(library, window, configuration)
         end
     end)
     connect(player.CharacterRemoving, function()
+        releaseAutoWalk()
         releaseSprint()
         releaseSpin()
         stopBasicFlight()
@@ -1707,6 +1751,33 @@ local function installLelHubControls(library, window, configuration)
     end)
     connect(player.CharacterAdded, function(character)
         hideAccessories(character)
+    end)
+    runService:BindToRenderStep(autoWalkBinding, Enum.RenderPriority.Character.Value + 1, function()
+        if destroyed or library.Unloaded then
+            cleanup()
+            return
+        end
+        local _, humanoid, root = parts()
+        if not state.AutoWalk or not humanoid or not root or humanoid.Health <= 0
+            or input:GetFocusedTextBox() or humanoid.SeatPart or humanoid.PlatformStand
+            or root.Anchored or basicFlags.Fly or configuration.LelHubOrbitActive
+            or (configuration.IsMovementBlocked and configuration.IsMovementBlocked()) then
+            releaseAutoWalk()
+            return
+        end
+        if autoWalkHumanoid ~= humanoid then
+            releaseAutoWalk()
+            autoWalkHumanoid = humanoid
+        end
+        local camera = workspace.CurrentCamera
+        local look = camera and camera.CFrame.LookVector or root.CFrame.LookVector
+        local direction = Vector3.new(look.X, 0, look.Z)
+        if direction.Magnitude < 0.01 then
+            look = root.CFrame.LookVector
+            direction = Vector3.new(look.X, 0, look.Z)
+        end
+        if direction.Magnitude >= 0.01 then autoWalkDirection = direction.Unit end
+        humanoid:Move(autoWalkDirection, false)
     end)
     local accessoryElapsed = 0
     connect(runService.PreSimulation, function(deltaTime)
@@ -1755,12 +1826,6 @@ local function installLelHubControls(library, window, configuration)
         end
 
         local camera = workspace.CurrentCamera
-
-        if state.AutoWalk and camera and not focused and not humanoid.SeatPart then
-            local look = camera.CFrame.LookVector
-            local direction = Vector3.new(look.X, 0, look.Z)
-            humanoid:Move(direction.Magnitude > 0.01 and direction.Unit or Vector3.zero, false)
-        end
 
         if state.Spin and not humanoid.SeatPart then
             if spinHumanoid ~= humanoid then
@@ -3647,6 +3712,7 @@ local function createInterface(context, library, window, lifetime, hub)
         GetSelectedPlayer = function() return otherPlayers:GetSelected() end,
         HasPlayerTeleport = true,
         PlayerTab = playerTab,
+        IsMovementBlocked = function() return playerControls.Fly or playerControls.Frozen end,
         ResetMovement = function()
             cameraControls:Stop()
             controls.PlayerFly:SetValue(false)

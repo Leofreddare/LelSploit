@@ -47,13 +47,19 @@ class WindowRouter(QObject):
             if self.single() and not window.isModal():
                 self.open(window)
             else:
-                record['show']()
+                self.reveal(window, record['show'])
         window.show = show
         if hasattr(window, 'exec'):
             native_exec = window.exec
             def execute():
                 if not self.single():
-                    return native_exec()
+                    window.setWindowOpacity(0.0)
+                    QTimer.singleShot(0, lambda: self._animate_window(window) if not sip.isdeleted(window) and window.isVisible() else None)
+                    try:
+                        return native_exec()
+                    finally:
+                        if not sip.isdeleted(window):
+                            window.setWindowOpacity(1.0)
                 loop = QEventLoop(window)
                 window.finished.connect(loop.quit)
                 self.open(window)
@@ -67,6 +73,28 @@ class WindowRouter(QObject):
             window.exec = execute
         window.installEventFilter(self)
         window.destroyed.connect(lambda _=None, w=window: self.forget(w))
+
+    def reveal(self, window, native_show):
+        if window.isVisible() or not window.isWindow():
+            native_show()
+            return
+        window.setWindowOpacity(0.0)
+        native_show()
+        self._animate_window(window)
+
+    def _animate_window(self, window):
+        old = getattr(window, '_window_fade', None)
+        if old is not None:
+            old.stop()
+            old.deleteLater()
+        animation = QPropertyAnimation(window, b'windowOpacity', window)
+        animation.setDuration(220)
+        animation.setStartValue(0.0)
+        animation.setEndValue(1.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        window._window_fade = animation
+        animation.finished.connect(lambda: window.setWindowOpacity(1.0))
+        animation.start()
 
     def open(self, window):
         if self.stack is None:
@@ -125,6 +153,11 @@ class WindowRouter(QObject):
                 self.stack.setCurrentWidget(target)
 
     def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.Hide and watched in self.records:
+            animation = getattr(watched, '_window_fade', None)
+            if animation is not None:
+                animation.stop()
+            watched.setWindowOpacity(1.0)
         if event.type() == QEvent.Type.Hide and not self.changing and self.pages and watched is self.pages[-1]:
             QTimer.singleShot(0, lambda w=watched: self.remove_page(w) if not sip.isdeleted(w) and not w.isVisible() else None)
         return False
@@ -156,6 +189,6 @@ class WindowRouter(QObject):
                         bar.pin_button.show()
                         bar.min_button.show()
                     if window is active:
-                        record['show']()
+                        self.reveal(window, record['show'])
         finally:
             self.changing = False

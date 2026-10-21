@@ -476,16 +476,7 @@ class ToolsWindow(QDialog):
 
     @staticmethod
     def _supported_deobfuscation_source(source):
-        try:
-            module = __import__("lelsploit_deobfuscate")
-            checker = getattr(module, "is_supported_obfuscated_format", None)
-            if checker is None:
-                checker = getattr(module, "is_supported_obfuscation", None)
-            if checker is None:
-                return False
-            return bool(checker(source))
-        except Exception:
-            return False
+        return isinstance(source, str) and bool(source.strip()) and '\x00' not in source
 
     def prefill_deobfuscate(self, source):
         source = str(source or "")
@@ -517,7 +508,7 @@ class ToolsWindow(QDialog):
         try:
             module = __import__("lelsploit_deobfuscate")
             if hasattr(module, "deobfuscate"):
-                result, report = module.deobfuscate(source, return_report=True)
+                result, report = module.deobfuscate(source, return_report=True, effort="deep", max_passes=12, time_budget=45.0)
             else:
                 engine = module.Deobfuscator()
                 result, report = engine.deobfuscate(source, return_report=True)
@@ -527,7 +518,7 @@ class ToolsWindow(QDialog):
             family = str(getattr(report, "best_family", "Unknown") or "Unknown")
             passes = list(getattr(report, "passes", ()) or ())
             warnings = list(getattr(report, "warnings", ()) or ())
-            status = f"LelSploit recognized {family}. Applied {len(passes)} pass{'es' if len(passes) != 1 else ''}."
+            status = f"{family}. Applied {len(passes)} pass{'es' if len(passes) != 1 else ''}."
             if passes:
                 status += " " + "; ".join(str(item) for item in passes[:5])
                 if len(passes) > 5:
@@ -651,8 +642,11 @@ class ToolsWindow(QDialog):
     def fetch_loadstring(self):
         source = self.loadstring_input.toPlainText().strip()
         url = extract_loadstring_url(source)
-        if url is None and source.startswith(("http://", "https://")):
-            url = source
+        if url is None and source and not any(c.isspace() for c in source):
+            try:
+                url = normalize_http_url(source)
+            except ValueError:
+                pass
         if not url:
             self.show_fetch_status("No HttpGet URL found.")
             return

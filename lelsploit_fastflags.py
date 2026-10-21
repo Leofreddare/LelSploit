@@ -331,6 +331,7 @@ class FastFlagListDialog(QDialog):
         self.setStyleSheet(r'''
             QDialog#fastFlagListDialog { background:#0b0c0d; color:#dedede; }
             QWidget { color:#dedede; }
+            QWidget#managedFlagPanel, QWidget#flagScrollContent { background:transparent; border:0; }
             QLabel { background:transparent; }
             QLineEdit { background:#0d0d0e; color:#ededed; border:1px solid #2a2a2d; border-radius:6px; min-height:32px; padding:0 9px; }
             QLineEdit:focus { background:#101012; border-color:#45454a; }
@@ -505,6 +506,7 @@ class FastFlagsWindow(QDialog):
         self.setStyleSheet(r'''
             QDialog#fastFlagsWindow { background:#0b0c0d; color:#dedede; }
             QWidget { color:#dedede; }
+            QWidget#managedFlagPanel, QWidget#flagScrollContent { background:transparent; border:0; }
             QLabel { background:transparent; }
             QCheckBox { background:transparent; color:#f1f1f1; spacing:7px; }
             QCheckBox::indicator { width:16px; height:16px; border:1px solid #696969; border-radius:3px; background:#090909; }
@@ -549,7 +551,7 @@ class FastFlagsWindow(QDialog):
             QPushButton#fastFlagCheck:checked { background:#356846; border-color:#6da17d; }
             QPushButton#flatButton, QPushButton#resetLink { background:transparent; border:0; color:#999; }
             QPushButton#flatButton:hover, QPushButton#resetLink:hover { color:#eee; background:transparent; }
-            QScrollArea, QScrollArea > QWidget > QWidget { border:0; background:transparent; }
+            QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget { border:0; background:transparent; }
             QScrollBar:vertical { width:9px; background:#070707; }
             QScrollBar::handle:vertical { background:#333; border-radius:4px; min-height:25px; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
@@ -569,7 +571,15 @@ class FastFlagsWindow(QDialog):
         if prominent:
             text.setStyleSheet("color:#eee;font-weight:600;background:transparent;")
         row.addWidget(text, 1)
-        row.addWidget(control, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        host = QWidget()
+        host.setFixedWidth(240)
+        host.setObjectName('flagControlHost')
+        host.setStyleSheet('QWidget#flagControlHost {background:transparent;border:0;}')
+        controls = QHBoxLayout(host)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.addStretch(1)
+        controls.addWidget(control)
+        row.addWidget(host, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return card
 
     def build_fastflag_page(self):
@@ -581,12 +591,14 @@ class FastFlagsWindow(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         content = QWidget()
+        content.setObjectName("flagScrollContent")
         layout = QVBoxLayout(content)
         layout.setContentsMargins(1, 1, 1, 1)
         layout.setSpacing(8)
         self.manager_check = FastFlagCheckButton()
         layout.addWidget(self.row_card("Allow LelSploit to manage FastFlags", self.manager_check, True))
         self.managed_panel = QWidget()
+        self.managed_panel.setObjectName("managedFlagPanel")
         managed = QVBoxLayout(self.managed_panel)
         managed.setContentsMargins(0, 0, 0, 0)
         managed.setSpacing(7)
@@ -607,14 +619,14 @@ class FastFlagsWindow(QDialog):
 
         title = QLabel("Quality overrides"); title.setObjectName("sectionTitle"); managed.addWidget(title)
         self.mesh_check = FastFlagCheckButton()
-        self.mesh_slider = JumpSlider(Qt.Orientation.Horizontal); self.mesh_slider.setRange(0, 4); self.mesh_slider.setFixedWidth(170)
+        self.mesh_slider = JumpSlider(Qt.Orientation.Horizontal); self.mesh_slider.setRange(0, 4); self.mesh_slider.setFixedWidth(125)
         self.mesh_value = QLabel("Default"); self.mesh_value.setFixedWidth(55)
         mesh_ctl = QWidget(); mesh_ctl.setStyleSheet("background:transparent;border:none;"); mesh_row = QHBoxLayout(mesh_ctl); mesh_row.setContentsMargins(0,0,0,0); mesh_row.setSpacing(8)
         mesh_row.addWidget(self.mesh_check); mesh_row.addWidget(self.mesh_slider); mesh_row.addWidget(self.mesh_value)
         managed.addWidget(self.row_card("Mesh LOD Override", mesh_ctl))
         self.frm_check = FastFlagCheckButton()
-        self.frm_slider = JumpSlider(Qt.Orientation.Horizontal); self.frm_slider.setRange(0, 21); self.frm_slider.setFixedWidth(170)
-        self.frm_value = QLabel("Default"); self.frm_value.setFixedWidth(62)
+        self.frm_slider = JumpSlider(Qt.Orientation.Horizontal); self.frm_slider.setRange(0, 21); self.frm_slider.setFixedWidth(125)
+        self.frm_value = QLabel("Default"); self.frm_value.setFixedWidth(55)
         frm_ctl = QWidget(); frm_ctl.setStyleSheet("background:transparent;border:none;"); frm_row = QHBoxLayout(frm_ctl); frm_row.setContentsMargins(0,0,0,0); frm_row.setSpacing(8)
         frm_row.addWidget(self.frm_check); frm_row.addWidget(self.frm_slider); frm_row.addWidget(self.frm_value)
         managed.addWidget(self.row_card("FRM Quality Override", frm_ctl))
@@ -1018,19 +1030,7 @@ class FastFlagsWindow(QDialog):
             reset.setEnabled(current_binding is not None)
 
     def add_custom_fastflag(self):
-        tracker_url = "https://raw.githubusercontent.com/MaximumADHD/Roblox-FFlag-Tracker/main/PCDesktopClient.json"
-        tracker_flags = {}
-        try:
-            request = urllib.request.Request(
-                tracker_url,
-                headers={"User-Agent": "LelSploit-FastFlags/1.0"},
-            )
-            with urllib.request.urlopen(request, timeout=8) as response:
-                remote_data = json.loads(response.read().decode("utf-8"))
-            if isinstance(remote_data, dict):
-                tracker_flags = {str(flag_name): flag_value for flag_name, flag_value in remote_data.items()}
-        except Exception as exc:
-            self.owner.log(f"Could not load Roblox FFlag Tracker suggestions: {exc}", "warning")
+        tracker_flags = {name: meta.get('value', '') for name, meta in combined_fastflag_catalog().items()}
 
         dialog = QDialog(self)
         dialog.setObjectName("addCustomFastFlagDialog")
@@ -1078,7 +1078,7 @@ class FastFlagsWindow(QDialog):
             for flag_name, flag_value in matches[:80]:
                 item = QListWidgetItem(flag_name)
                 item.setData(Qt.ItemDataRole.UserRole, flag_name)
-                item.setToolTip(f"Current tracker value: {value_text(flag_value)}")
+                item.setToolTip(f"Suggested value: {value_text(flag_value)}")
                 suggestions.addItem(item)
 
         def choose_item(item):
@@ -1102,6 +1102,7 @@ class FastFlagsWindow(QDialog):
         dialog.setStyleSheet(r'''
             QDialog#addCustomFastFlagDialog { background:#0b0c0d; color:#dedede; }
             QWidget { color:#dedede; }
+            QWidget#managedFlagPanel, QWidget#flagScrollContent { background:transparent; border:0; }
             QLabel { background:transparent; }
             QLineEdit { background:#0d0d0e; color:#ededed; border:1px solid #2a2a2d; border-radius:6px; min-height:33px; padding:0 9px; }
             QLineEdit:focus { background:#101012; border-color:#45454a; }
@@ -1227,7 +1228,8 @@ class FastFlagsWindow(QDialog):
     def build_assets_page(self):
         page = QWidget(); page.setObjectName("assetsPage"); page.setAutoFillBackground(False); root = QVBoxLayout(page); root.setContentsMargins(0,0,0,0)
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
-        content = QWidget(); layout = QVBoxLayout(content); layout.setContentsMargins(1,1,1,1); layout.setSpacing(7)
+        content = QWidget()
+        content.setObjectName("flagScrollContent"); layout = QVBoxLayout(content); layout.setContentsMargins(1,1,1,1); layout.setSpacing(7)
         font_title = QLabel("Custom Font"); font_title.setObjectName("sectionTitle"); layout.addWidget(font_title)
         font_row = ModificationSourceRow(self, "Custom Font", "__font__", "font")
         self.asset_rows.append(font_row); layout.addWidget(font_row)

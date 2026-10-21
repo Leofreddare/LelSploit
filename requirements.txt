@@ -1,0 +1,11 @@
+# Python 3.11+ (64-bit); Windows is required for native API and release builds.
+# Runtime
+PyQt6
+PyQt6-QScintilla
+cryptography
+certifi
+zstandard
+
+# Portable EXE build
+Nuitka
+ordered-set

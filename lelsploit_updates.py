@@ -108,7 +108,7 @@ def select_asset(release, installed):
             url = urllib.parse.urlparse(str(asset.get('browser_download_url') or ''))
             if url.scheme == 'https' and url.hostname == 'github.com' and url.path.casefold().startswith('/leofreddare/lelsploit/releases/download/'):
                 return asset
-    raise ValueError(f'This release has no {extension} download. Please check the release page or try again later.')
+    raise ValueError(f'This release has no {extension} download. Please try again later.')
 
 
 def download_asset(asset, destination, progress=None, cancel=None, opener=None):

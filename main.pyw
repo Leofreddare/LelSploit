@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 
 import os
 import sys
@@ -22,8 +22,8 @@ def _appdata_dir() -> Path:
 def _report_error(exc: BaseException, appdata: Path) -> None:
     detail = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
     try:
-        appdata.mkdir(parents=True, exist_ok=True)
-        (appdata / "startup_error.log").write_text(detail, encoding="utf-8")
+        (appdata / "logs").mkdir(parents=True, exist_ok=True)
+        (appdata / "logs" / "startup_error.log").write_text(detail, encoding="utf-8")
     except Exception:
         pass
     if sys.platform == "win32":
@@ -34,7 +34,7 @@ def _report_error(exc: BaseException, appdata: Path) -> None:
                 "LelSploit could not start.\n\n"
                 + str(exc)
                 + "\n\nDetails were written to "
-                + str(appdata / "startup_error.log"),
+                + str(appdata / "logs" / "startup_error.log"),
                 "LelSploit",
                 0x10,
             )
@@ -49,13 +49,8 @@ def main() -> int:
         runtime_text = str(runtime)
         if runtime_text not in sys.path:
             sys.path.insert(0, runtime_text)
-        try:
-            from lelsploit_api import ensure_appdata_dlls
-        except ModuleNotFoundError as exc:
-            if exc.name != "lelsploit_api":
-                raise
-        else:
-            ensure_appdata_dlls()
+        from api.lelsploit_api import ensure_appdata_dlls
+        ensure_appdata_dlls()
         appdata.mkdir(parents=True, exist_ok=True)
         os.chdir(appdata)
         args = list(sys.argv[1:])

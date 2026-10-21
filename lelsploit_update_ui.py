@@ -2,14 +2,21 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal, QUrl
-from PyQt6.QtGui import QDesktopServices
-from PyQt6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar, QPushButton
+from PyQt6.QtCore import QObject, Qt, QTimer, pyqtSignal, QSize
+from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QDialog, QFrame, QHBoxLayout, QLabel, QTextBrowser, QProgressBar, QPushButton, QStyle
 
-from lelsploit_updates import (RELEASES_URL, DownloadCancelled, fetch_release,
+from lelsploit_updates import (DownloadCancelled, fetch_release,
                               has_start_menu_install, select_asset, download_asset, launch_installer)
+
+
+class LocalNotesBrowser(QTextBrowser):
+    """Render release notes without fetching embedded images or other resources."""
+    def loadResource(self, resource_type, name):
+        return None
 
 
 class UpdateDialog(QDialog):
@@ -18,12 +25,13 @@ class UpdateDialog(QDialog):
         self.manager = manager
         self.setWindowTitle('LelSploit updates')
         self.setModal(True)
-        self.resize(480, 420)
+        self.resize(540, 460)
         self.setMinimumWidth(430)
         manager.apply_icon(self)
         layout = manager.blur_layout(self, self, 'LelSploit updates', (22, 18, 22, 20), 12)
         heading = QHBoxLayout()
-        mark = QLabel('↑')
+        mark = QLabel()
+        self.mark = mark
         mark.setObjectName('updateMark')
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
         mark.setFixedSize(44, 44)
@@ -41,9 +49,12 @@ class UpdateDialog(QDialog):
         self.description.setWordWrap(True)
         self.description.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.description)
-        self.notes = QPlainTextEdit()
+        self.notes = LocalNotesBrowser()
+        self.notes.setOpenLinks(False)
+        self.notes.setOpenExternalLinks(False)
+        self.notes.document().setDefaultStyleSheet("h1,h2,h3 { color:#eff5f1; margin-top:14px; } p,li { line-height:145%; } code { color:#b7d6c1; } a { color:#a8cbb4; }")
         self.notes.setReadOnly(True)
-        self.notes.setPlaceholderText('Release notes')
+        self.notes.setAccessibleName('What changed in this update')
         self.notes.setMinimumHeight(115)
         self.notes.setMaximumHeight(190)
         layout.addWidget(self.notes, 1)
@@ -57,10 +68,6 @@ class UpdateDialog(QDialog):
         self.detail.setTextFormat(Qt.TextFormat.PlainText)
         layout.addWidget(self.detail)
         actions = QHBoxLayout()
-        self.release_link = QPushButton('Release page')
-        self.release_link.setObjectName('updateLink')
-        self.release_link.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(RELEASES_URL)))
-        actions.addWidget(self.release_link)
         actions.addStretch(1)
         self.later = QPushButton('Later')
         self.later.clicked.connect(self.reject)
@@ -78,7 +85,7 @@ class UpdateDialog(QDialog):
             QLabel#updateMark { color:#c4dfca; background:#1d2b23; border:1px solid #3b5543; border-radius:12px; font-size:28px; }
             QLabel#updateVersions { color:#d3e3d7; background:#171d19; border:1px solid #303d33; padding:9px; border-radius:6px; }
             QLabel#updateDetail { color:#929da5; font-size:11px; }
-            QPlainTextEdit { color:#c7cfd5; background:#111518; border:1px solid #2c343a; border-radius:7px; padding:8px; font-size:12px; }
+            QTextBrowser { color:#c7cfd5; background:#111518; border:1px solid #2c343a; border-radius:7px; padding:8px; font-size:12px; }
             QProgressBar { border:none; background:#232b2e; border-radius:2px; }
             QProgressBar::chunk { background:#9ebca5; border-radius:2px; }
             QPushButton { color:#d5dce0; background:#171d21; border:1px solid #303a40; border-radius:6px; padding:8px 12px; }
@@ -99,13 +106,13 @@ class UpdateDialog(QDialog):
         release = manager.release
         tag = str(release.get('tag_name', '')) if release else ''
         self.versions.setText(f'v{manager.version}  →  {tag}' if release else f'Current version  v{manager.version}')
-        self.notes.setPlainText(str(release.get('body') or 'No release notes were provided.')[:30000] if release else '')
+        self.notes.setMarkdown(str(release.get('body') or 'No release notes were provided.')[:30000] if release else '')
         self.notes.setVisible(bool(release))
         self.detail.setText(manager.status)
         self.progress.setVisible(state in ('checking', 'downloading', 'launching'))
         if state == 'checking':
             self.heading.setText('Checking for updates')
-            self.description.setText('Looking for the newest stable LelSploit release.')
+            self.description.clear()
             self.progress.setRange(0, 0)
         elif state == 'downloading':
             self.heading.setText('Downloading update')
@@ -115,18 +122,30 @@ class UpdateDialog(QDialog):
             self.description.setText('Starting the downloaded update and closing LelSploit.')
         elif release:
             self.heading.setText('An update is available')
-            self.description.setText('A newer stable release is ready. Update now, or keep working and install it later.')
+            self.description.clear()
         elif state == 'error':
             self.heading.setText('Could not check for updates')
             self.description.setText('Check your connection and try again.')
         else:
             self.heading.setText("You're up to date")
-            self.description.setText('No newer stable release is available.')
+            self.description.clear()
+        self.description.setVisible(bool(self.description.text()))
+        self.detail.setVisible(state in ('error', 'downloading', 'launching') or manager.status.startswith(('Could not', 'Update download', 'Download cancelled')))
+        icon_name, fallback = ('download', QStyle.StandardPixmap.SP_ArrowDown) if release else ('refresh', QStyle.StandardPixmap.SP_BrowserReload)
+        self.update.setIcon(self._icon(icon_name, fallback))
+        self.update.setIconSize(QSize(17, 17))
+        self.later.setIcon(self._icon('close', QStyle.StandardPixmap.SP_DialogCloseButton))
+        self.mark.setPixmap(self._icon('update', QStyle.StandardPixmap.SP_ArrowUp).pixmap(26, 26))
         busy = state in ('checking', 'downloading', 'launching')
         self.update.setText('Downloading…' if state == 'downloading' else 'Opening…' if state == 'launching' else 'Update now' if release else 'Check again')
         self.update.setEnabled(not busy)
         self.later.setEnabled(state != 'launching')
         self.later.setText('Cancel' if state == 'downloading' else 'Later' if release else 'Close')
+
+    def _icon(self, name, fallback):
+        path = Path(__file__).resolve().parent / 'icons' / (name + '.png')
+        icon = QIcon(str(path)) if path.is_file() else QIcon()
+        return icon if not icon.isNull() else self.style().standardIcon(fallback)
 
     def show_progress(self, percent, detail):
         if self.manager.state != 'downloading':
@@ -181,7 +200,7 @@ class UpdateController(QObject):
         self._checked.connect(self._check_finished)
         self._downloaded.connect(self._download_finished)
         self.timer = QTimer(self)
-        self.timer.setInterval(60 * 60 * 1000)
+        self.timer.setInterval(24 * 60 * 60 * 1000)
         self.timer.timeout.connect(self.check)
         if self.auto_enabled():
             self.timer.start()
@@ -203,7 +222,12 @@ class UpdateController(QObject):
 
     def _startup_check(self):
         if self.auto_enabled():
-            self.check()
+            try:
+                last = float(self.owner.settings.value('updates/last_check', 0) or 0)
+            except (ValueError, TypeError):
+                last = 0
+            if not 0 <= time.time() - last < 86400:
+                self.check()
 
     def show_dialog(self):
         if self.dialog is None:
@@ -244,9 +268,11 @@ class UpdateController(QObject):
             self.state = 'error'
             self.status = f'Update check failed: {error}'
         else:
+            self.owner.settings.setValue('updates/last_check', time.time())
+            self.owner.settings.sync()
             self.release = release
             self.state = 'available' if release else 'current'
-            self.status = f"Update available: {release['tag_name']}" if release else f'No newer stable release · v{self.version}'
+            self.status = f"Update available: {release['tag_name']}" if release else f'Up to date · v{self.version}'
         self.status_changed.emit()
         if release and not error and (manual or (self.auto_enabled() and self._notified_tag != release['tag_name'])):
             self._notified_tag = release['tag_name']
