@@ -1190,6 +1190,35 @@ local function installLelHubControls(library, window, configuration)
     button(movement, "Restore movement", restoreBasicMovement)
 
     local characterSection = ui(utilityTab, "Section", "Character")
+    local touchFlingEnabled = false
+    local touchFlingRunning = false
+    toggle(characterSection, "TouchFling", "Touch Fling", function(value)
+        touchFlingEnabled = value
+        if not value or touchFlingRunning then return end
+        touchFlingRunning = true
+        task.spawn(function()
+            local verticalOffset = 0.1
+            while touchFlingEnabled and not destroyed do
+                runService.Heartbeat:Wait()
+                if not touchFlingEnabled or destroyed then break end
+                local _, _, rootPart = parts()
+                if rootPart then
+                    local originalVelocity = rootPart.Velocity
+                    rootPart.Velocity = originalVelocity * 10000 + Vector3.new(0, 10000, 0)
+                    runService.RenderStepped:Wait()
+                    if rootPart.Parent then
+                        rootPart.Velocity = originalVelocity
+                    end
+                    runService.Stepped:Wait()
+                    if rootPart.Parent then
+                        rootPart.Velocity = originalVelocity + Vector3.new(0, verticalOffset, 0)
+                    end
+                    verticalOffset = -verticalOffset
+                end
+            end
+            touchFlingRunning = false
+        end)
+    end)
     toggle(characterSection, "HideAccessories", "Hide accessories locally", function(value)
         state.HideAccessories = value
 
